@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>BTC · Prophet forecast</title>
+  <meta name="description" content="A blind out-of-sample backtest of Facebook Prophet on Bitcoin's all-time daily history, with a forward 180-day projection." />
+  <meta name="theme-color" content="#06070A" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23E8B86B'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='Inter,sans-serif' font-weight='700' font-size='18' fill='%231A1208'%3E%E2%82%BF%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.49.1/dist/apexcharts.min.js"></script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <div class="aurora" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="cursor-glow" aria-hidden="true"></div>
+
+  <div class="container">
+
+    <nav>
+      <div class="logo">
+        <div class="logo-mark" aria-hidden="true">₿</div>
+        <span class="logo-text">Prophet<span class="logo-dot">·</span>BTC</span>
+      </div>
+      <div class="nav-meta">
+        <a class="nav-link" href="https://github.com/MohamedYassineBenomar/Btc-price-next-trend-direction-predection" target="_blank" rel="noopener">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          <span>Repo</span>
+        </a>
+        <div class="badge">
+          <span class="pulse-dot" aria-hidden="true"></span>
+          <span id="updated-label">live</span>
+        </div>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <span class="eyebrow">Time-series forecast · Facebook Prophet</span>
+      <h1 class="reveal">Predicting Bitcoin's next <em>direction</em>.</h1>
+      <p class="hero-sub reveal">A blind out-of-sample backtest on the last 365 days of <span class="mono">BTC-USD</span>, with a forward 180-day projection generated from the full price history.</p>
+
+      <div class="kpis">
+        <div class="kpi reveal">
+          <div class="kpi-label">Spot price</div>
+          <div class="kpi-value" id="kpi-price">—</div>
+          <div class="kpi-meta" id="kpi-price-meta">—</div>
+        </div>
+        <div class="kpi reveal">
+          <div class="kpi-label">90-day forecast</div>
+          <div class="kpi-value" id="kpi-forecast">—</div>
+          <div class="kpi-meta" id="kpi-forecast-meta">—</div>
+        </div>
+        <div class="kpi reveal">
+          <div class="kpi-label">Backtest MAPE</div>
+          <div class="kpi-value" id="kpi-mape">—</div>
+          <div class="kpi-meta">on 365 held-out days</div>
+        </div>
+        <div class="kpi reveal">
+          <div class="kpi-label">Direction accuracy</div>
+          <div class="kpi-value" id="kpi-dir">—</div>
+          <div class="kpi-meta">daily up / down hit-rate</div>
+        </div>
+      </div>
+    </header>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <span class="eyebrow eyebrow-sm">01 — Long view</span>
+          <h2>All-time price &amp; forward projection</h2>
+          <p class="section-sub">Bitcoin since September 2014, plotted on a logarithmic scale, extended by Prophet's 180-day forecast and 80% uncertainty band.</p>
+        </div>
+        <div class="chart-toggle" id="range-toggle" role="tablist" aria-label="Time range">
+          <button data-range="1y" role="tab" aria-selected="false">1Y</button>
+          <button data-range="3y" class="active" role="tab" aria-selected="true">3Y</button>
+          <button data-range="all" role="tab" aria-selected="false">All</button>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div id="chart-main" style="height:520px;"></div>
+        <div class="chart-legend">
+          <span><i class="dot dot-gold"></i> Historical close</span>
+          <span><i class="dot dot-blue"></i> Forecast median</span>
+          <span><i class="band band-blue"></i> 80% uncertainty band</span>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <span class="eyebrow eyebrow-sm">02 — Blind backtest</span>
+          <h2>Last 365 days · prediction vs reality</h2>
+          <p class="section-sub">Prophet was trained <em>only</em> on data before this window, then asked to predict it cold. No look-ahead, no re-training, no leakage.</p>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div id="chart-backtest" style="height:440px;"></div>
+        <div class="metrics-row">
+          <div class="metric">
+            <div class="metric-label">MAE</div>
+            <div class="metric-value" id="m-mae">—</div>
+            <div class="metric-foot">mean absolute error</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">RMSE</div>
+            <div class="metric-value" id="m-rmse">—</div>
+            <div class="metric-foot">root-mean-squared error</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">MAPE</div>
+            <div class="metric-value" id="m-mape">—</div>
+            <div class="metric-foot">mean absolute % error</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Direction</div>
+            <div class="metric-value" id="m-dir">—</div>
+            <div class="metric-foot">daily up/down hit-rate</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="method">
+      <div class="method-grid">
+        <div>
+          <span class="eyebrow eyebrow-sm">Methodology</span>
+          <h3>Honest, reproducible, no leakage.</h3>
+        </div>
+        <ol class="method-steps">
+          <li><span class="step-num">01</span><div><strong>Fetch</strong><span>All-time daily BTC-USD closes from Yahoo Finance (4,252 observations since 2014-09-17).</span></div></li>
+          <li><span class="step-num">02</span><div><strong>Hold out</strong><span>Last 365 days are removed from the training set and never seen by the model.</span></div></li>
+          <li><span class="step-num">03</span><div><strong>Fit</strong><span>Prophet trained on log-prices with yearly seasonality and a flexible changepoint prior.</span></div></li>
+          <li><span class="step-num">04</span><div><strong>Score</strong><span>Predictions over the held-out window scored on MAE, RMSE, MAPE, and directional hit-rate.</span></div></li>
+          <li><span class="step-num">05</span><div><strong>Project</strong><span>Re-fit on the full series, project 180 days forward with an 80% uncertainty band.</span></div></li>
+        </ol>
+      </div>
+    </section>
+
+    <footer>
+      <div>
+        <span id="data-range">—</span> · <span id="n-obs">—</span> daily observations
+      </div>
+      <div class="foot-right">
+        <span>Source: Yahoo Finance</span>
+        <span class="dim">·</span>
+        <span>Model: Prophet 1.3</span>
+        <span class="dim">·</span>
+        <span>Generated <span id="generated-at">—</span></span>
+      </div>
+    </footer>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
