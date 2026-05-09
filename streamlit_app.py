@@ -388,7 +388,7 @@ def backtest_chart(backtest: pd.DataFrame, prior: pd.DataFrame | None = None) ->
         fig.add_trace(go.Scatter(
             x=prior["ds"], y=prior["y_prior"],
             mode="lines",
-            line=dict(color="rgba(244,244,246,0.55)", width=1.6, dash="dot", shape="spline", smoothing=0.4),
+            line=dict(color="#9CA3AF", width=2, dash="dot", shape="spline", smoothing=0.4),
             name="Same period · prior year",
             hovertemplate="<b>%{x|%b %Y}</b> (prior year)<br>$%{y:,.0f}<extra></extra>",
         ))

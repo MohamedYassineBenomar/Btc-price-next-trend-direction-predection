@@ -255,8 +255,11 @@ function renderBacktestChart(data) {
       { name: 'Predicted', data: predicted },
       { name: 'Actual',    data: actual    },
     ],
-    colors: ['rgba(244,244,246,0.55)', COLORS.blue, COLORS.gold],
-    stroke: { curve: 'smooth', width: [1.6, 2, 2.6], dashArray: [3, 5, 0] },
+    // ApexCharts needs hex/named colors for the `colors` array — rgba() values
+    // are silently ignored by some series renderers. Use a high-contrast
+    // teal-ish gray for prior year so it's distinct from gold + blue.
+    colors: ['#9CA3AF', COLORS.blue, COLORS.gold],
+    stroke: { curve: 'smooth', width: [2, 2, 2.8], dashArray: [4, 5, 0] },
     fill: { type: ['solid', 'solid', 'solid'], opacity: [1, 1, 1] },
     markers: { size: 0, hover: { size: 5 } },
   };
