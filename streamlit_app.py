@@ -313,6 +313,23 @@ def base_layout(height: int = 460) -> dict:
 
 
 # ─── Charts ───────────────────────────────────────────────────
+def history_chart(df: pd.DataFrame) -> go.Figure:
+    """All-time BTC history — log scale, gold area, no overlays."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["ds"], y=df["y"],
+        mode="lines",
+        line=dict(color=GOLD, width=1.8, shape="spline", smoothing=0.4),
+        fill="tozeroy",
+        fillcolor="rgba(232,184,107,0.18)",
+        name="BTC close",
+        hovertemplate="<b>%{x|%b %Y}</b><br>$%{y:,.0f}<extra></extra>",
+    ))
+    fig.update_layout(**base_layout(height=380))
+    fig.update_yaxes(type="log", tickprefix="$", tickformat=",.0f")
+    return fig
+
+
 def main_chart(df: pd.DataFrame, forward: pd.DataFrame) -> go.Figure:
     last = df.iloc[-1]
     cutoff = pd.Timestamp(last["ds"]) - pd.Timedelta(days=3 * 365)
@@ -502,15 +519,32 @@ c4.markdown(
     unsafe_allow_html=True,
 )
 
-# ─── Section 1: Long view ─────────────────────────────────────
+# ─── Section 0: Full history ──────────────────────────────────
+st.write("")
+st.write("")
+st.markdown(
+    """
+<div>
+  <span class="eyebrow-sm">00 — Full history</span>
+  <h2 class="section-h">BTC since September 2014</h2>
+  <p class="section-sub">Every 15-day average close from launch to today, plotted on a logarithmic scale so the early sub-$1k era stays legible next to today's <span class="mono">$70k+</span> world.</p>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+st.markdown('<div class="chart-wrap">', unsafe_allow_html=True)
+st.plotly_chart(history_chart(df), use_container_width=True, config={"displayModeBar": False})
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ─── Section 1: Recent & forward ──────────────────────────────
 st.write("")
 st.write("")
 st.markdown(
     f"""
 <div>
-  <span class="eyebrow-sm">01 — Long view</span>
-  <h2 class="section-h">All-time price &amp; forward projection</h2>
-  <p class="section-sub">15-day average BTC-USD plotted on a logarithmic scale, extended by Prophet's 6-month forecast and 80% uncertainty band.</p>
+  <span class="eyebrow-sm">01 — Recent &amp; forward</span>
+  <h2 class="section-h">Last 3 years &amp; 6-month projection</h2>
+  <p class="section-sub">Recent BTC-USD action zoomed in, extended by Prophet's 6-month forecast and 80% uncertainty band.</p>
 </div>
 """,
     unsafe_allow_html=True,

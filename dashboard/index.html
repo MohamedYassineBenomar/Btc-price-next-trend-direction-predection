@@ -70,9 +70,22 @@
     <section>
       <div class="section-head">
         <div>
-          <span class="eyebrow eyebrow-sm">01 — Long view</span>
-          <h2>All-time price &amp; forward projection</h2>
-          <p class="section-sub">15-day average BTC-USD since September 2014, plotted on a logarithmic scale, extended by Prophet's 6-month forecast and 80% uncertainty band.</p>
+          <span class="eyebrow eyebrow-sm">00 — Full history</span>
+          <h2>BTC since September 2014</h2>
+          <p class="section-sub">Every 15-day average close from launch to today, plotted on a logarithmic scale so the early sub-$1k era stays legible next to today's <span class="mono">$70k+</span> world.</p>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div id="chart-history" style="height:380px;"></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <span class="eyebrow eyebrow-sm">01 — Recent &amp; forward</span>
+          <h2>Last 3 years &amp; 6-month projection</h2>
+          <p class="section-sub">Recent BTC-USD action zoomed in, extended by Prophet's 6-month forecast and 80% uncertainty band.</p>
         </div>
         <div class="chart-toggle" id="range-toggle" role="tablist" aria-label="Time range">
           <button data-range="1y" role="tab" aria-selected="false">1Y</button>

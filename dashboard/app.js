@@ -71,9 +71,40 @@ fetch('data.json', { cache: 'no-cache' })
 function render(data) {
   paintKPIs(data);
   paintFooter(data);
+  renderHistoryChart(data);
   const mainChart = renderMainChart(data);
   renderBacktestChart(data);
   wireScaleToggle(mainChart);
+}
+
+// ─── All-time history chart ───────────────────────────────────
+function renderHistoryChart(data) {
+  const points = data.history.map((d) => ({ x: ms(d.ds), y: d.y }));
+  const opts = {
+    ...commonOpts(),
+    chart: { ...commonOpts().chart, id: 'history', type: 'area', height: 380 },
+    series: [{ name: 'BTC close (15-day avg)', data: points }],
+    colors: [COLORS.gold],
+    stroke: { curve: 'smooth', width: 1.6 },
+    fill: {
+      type: 'gradient',
+      gradient: {
+        shadeIntensity: 0.35,
+        type: 'vertical',
+        opacityFrom: 0.42,
+        opacityTo: 0.0,
+        stops: [0, 100],
+      },
+    },
+    markers: { size: 0, hover: { size: 0 } },
+    yaxis: {
+      ...commonOpts().yaxis,
+      logarithmic: true,
+      logBase: 10,
+      min: 1,
+    },
+  };
+  new ApexCharts(document.getElementById('chart-history'), opts).render();
 }
 
 // ─── KPIs ─────────────────────────────────────────────────────
