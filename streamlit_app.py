@@ -385,44 +385,26 @@ def main_chart(df: pd.DataFrame, forward: pd.DataFrame) -> go.Figure:
 
 
 def backtest_chart(backtest: pd.DataFrame, prior: pd.DataFrame | None = None) -> go.Figure:
-    # Clip the band so the Prophet 12-month upper bound doesn't squash the y-axis.
-    ys = pd.concat([backtest["y"], backtest["yhat"]])
-    span = ys.max() - ys.min()
-    clip_max = ys.max() + span * 0.55
-    clip_min = max(0, ys.min() - span * 0.55)
-    upper = backtest["yhat_upper"].clip(upper=clip_max)
-    lower = backtest["yhat_lower"].clip(lower=clip_min)
-
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=backtest["ds"], y=upper,
-        mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip",
-    ))
-    fig.add_trace(go.Scatter(
-        x=backtest["ds"], y=lower,
-        mode="lines", line=dict(width=0),
-        fill="tonexty", fillcolor="rgba(111,134,255,0.15)",
-        name="80% range", hoverinfo="skip",
-    ))
-    fig.add_trace(go.Scatter(
-        x=backtest["ds"], y=backtest["yhat"],
-        mode="lines",
-        line=dict(color=BLUE, width=1.8, dash="dash", shape="spline", smoothing=0.4),
-        name="Predicted",
-        hovertemplate="<b>%{x|%b %Y}</b><br>$%{y:,.0f}<extra></extra>",
-    ))
     if prior is not None and not prior.empty:
         fig.add_trace(go.Scatter(
             x=prior["ds"], y=prior["y_prior"],
             mode="lines",
-            line=dict(color="rgba(244,244,246,0.45)", width=1.6, dash="dot", shape="spline", smoothing=0.4),
+            line=dict(color="rgba(244,244,246,0.55)", width=1.6, dash="dot", shape="spline", smoothing=0.4),
             name="Same period · prior year",
             hovertemplate="<b>%{x|%b %Y}</b> (prior year)<br>$%{y:,.0f}<extra></extra>",
         ))
     fig.add_trace(go.Scatter(
+        x=backtest["ds"], y=backtest["yhat"],
+        mode="lines",
+        line=dict(color=BLUE, width=2, dash="dash", shape="spline", smoothing=0.4),
+        name="Predicted",
+        hovertemplate="<b>%{x|%b %Y}</b><br>$%{y:,.0f}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
         x=backtest["ds"], y=backtest["y"],
         mode="lines",
-        line=dict(color=GOLD, width=2.6, shape="spline", smoothing=0.4),
+        line=dict(color=GOLD, width=2.8, shape="spline", smoothing=0.4),
         name="Actual",
         hovertemplate="<b>%{x|%b %Y}</b><br>$%{y:,.0f}<extra></extra>",
     ))
