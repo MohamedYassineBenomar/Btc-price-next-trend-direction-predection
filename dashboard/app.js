@@ -196,9 +196,9 @@ function renderMainChart(data) {
   const lastHist = data.history[data.history.length - 1];
   const lastMs = ms(lastHist.ds);
 
-  // Default visible window: last ~3 years so the 180-day forecast at the right
-  // edge is clearly readable. User can pan/zoom out to see the full history.
-  const windowStartMs = lastMs - 3 * 365 * 24 * 60 * 60 * 1000;
+  // Default visible window: last ~3 months so the 30-day forecast at the
+  // right edge is clearly readable. User can zoom out via the toggle.
+  const windowStartMs = lastMs - 90 * 24 * 60 * 60 * 1000;
   const histPoints = data.history.map((d) => ({ x: ms(d.ds), y: d.y }));
   const forwardLine = [
     { x: lastMs, y: lastHist.y },
@@ -278,6 +278,18 @@ function renderBacktestChart(data) {
   const actual    = preds.map((d) => ({ x: ms(d.ds), y: d.y }));
   const priorYear = (data.backtest.prior_year || []).map((d) => ({ x: ms(d.ds), y: d.y_prior }));
 
+  // ApexCharts' auto-scale on multi-series line charts can clip series whose
+  // range falls outside the dominant one. Force the y-axis to include all
+  // three series with a small pad.
+  const allYs = [
+    ...predicted.map((p) => p.y),
+    ...actual.map((p) => p.y),
+    ...priorYear.map((p) => p.y),
+  ].filter((v) => v != null && !isNaN(v));
+  const yMin = Math.min(...allYs);
+  const yMax = Math.max(...allYs);
+  const pad = (yMax - yMin) * 0.06;
+
   const opts = {
     ...commonOpts(),
     chart: { ...commonOpts().chart, id: 'backtest', type: 'line', height: 440 },
@@ -286,13 +298,16 @@ function renderBacktestChart(data) {
       { name: 'Predicted', data: predicted },
       { name: 'Actual',    data: actual    },
     ],
-    // ApexCharts needs hex/named colors for the `colors` array — rgba() values
-    // are silently ignored by some series renderers. Use a high-contrast
-    // teal-ish gray for prior year so it's distinct from gold + blue.
     colors: ['#9CA3AF', COLORS.blue, COLORS.gold],
     stroke: { curve: 'smooth', width: [2, 2, 2.8], dashArray: [4, 5, 0] },
     fill: { type: ['solid', 'solid', 'solid'], opacity: [1, 1, 1] },
     markers: { size: 0, hover: { size: 5 } },
+    yaxis: {
+      ...commonOpts().yaxis,
+      min: Math.max(0, yMin - pad),
+      max: yMax + pad,
+      forceNiceScale: true,
+    },
   };
 
   new ApexCharts(document.getElementById('chart-backtest'), opts).render();
@@ -314,10 +329,10 @@ function wireScaleToggle(chart) {
     const ctx = chart.__btc;
     if (!ctx) return;
     const lastForecastMs = ctx.forwardLine[ctx.forwardLine.length - 1].x;
-    const yearMs = 365 * 24 * 60 * 60 * 1000;
+    const dayMs = 24 * 60 * 60 * 1000;
     const min = range === 'all' ? ctx.allHistMs[0]
-              : range === '1y'  ? ctx.lastMs - yearMs
-              : ctx.lastMs - 3 * yearMs;
+              : range === '1m'  ? ctx.lastMs - 30 * dayMs
+              : ctx.lastMs - 90 * dayMs;
     chart.updateOptions(
       { xaxis: { min, max: lastForecastMs } },
       false,
