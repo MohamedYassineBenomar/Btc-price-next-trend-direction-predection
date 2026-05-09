@@ -240,43 +240,24 @@ function renderMainChart(data) {
   return chart;
 }
 
-// ─── Backtest chart: actual vs predicted on the held-out year ─
+// ─── Backtest chart: actual vs predicted vs prior-year ────────
 function renderBacktestChart(data) {
   const preds = data.backtest.predictions;
-
-  // Prophet's 80% band, when fit in log-space and exponentiated, can blow up
-  // 365 days out. Clip the band to a sensible window so it stays informative
-  // instead of stretching the y-axis and squashing the signal lines flat.
-  const ys = preds.flatMap((d) => [d.y, d.yhat]);
-  const yLo = Math.min(...ys);
-  const yHi = Math.max(...ys);
-  const span = yHi - yLo;
-  const clipMax = yHi + span * 0.55;
-  const clipMin = Math.max(0, yLo - span * 0.55);
-
-  const band = preds.map((d) => ({
-    x: ms(d.ds),
-    y: [Math.max(clipMin, d.yhat_lower), Math.min(clipMax, d.yhat_upper)],
-  }));
   const predicted = preds.map((d) => ({ x: ms(d.ds), y: d.yhat }));
   const actual    = preds.map((d) => ({ x: ms(d.ds), y: d.y }));
   const priorYear = (data.backtest.prior_year || []).map((d) => ({ x: ms(d.ds), y: d.y_prior }));
 
   const opts = {
     ...commonOpts(),
-    chart: { ...commonOpts().chart, id: 'backtest', type: 'rangeArea', height: 440 },
+    chart: { ...commonOpts().chart, id: 'backtest', type: 'line', height: 440 },
     series: [
-      { name: '80% range',      type: 'rangeArea', data: band      },
-      { name: 'Predicted',      type: 'line',      data: predicted },
-      { name: 'Same period last year', type: 'line', data: priorYear },
-      { name: 'Actual',         type: 'line',      data: actual    },
+      { name: 'Same period · prior year', data: priorYear },
+      { name: 'Predicted', data: predicted },
+      { name: 'Actual',    data: actual    },
     ],
-    colors: [COLORS.blue, COLORS.blue, 'rgba(244,244,246,0.45)', COLORS.gold],
-    stroke: { curve: 'smooth', width: [0, 1.8, 1.6, 2.6], dashArray: [0, 5, 2, 0] },
-    fill: {
-      type: ['solid', 'solid', 'solid', 'solid'],
-      opacity: [0.14, 1, 1, 1],
-    },
+    colors: ['rgba(244,244,246,0.55)', COLORS.blue, COLORS.gold],
+    stroke: { curve: 'smooth', width: [1.6, 2, 2.6], dashArray: [3, 5, 0] },
+    fill: { type: ['solid', 'solid', 'solid'], opacity: [1, 1, 1] },
     markers: { size: 0, hover: { size: 5 } },
   };
 
