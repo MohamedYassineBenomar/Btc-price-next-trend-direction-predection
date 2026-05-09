@@ -15,7 +15,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from pipeline import HOLDOUT_DAYS, blind_backtest, fetch_history, forward_forecast
+from pipeline import (
+    FUTURE_MONTHS,
+    HOLDOUT_MONTHS,
+    blind_backtest,
+    fetch_history,
+    forward_forecast,
+    prior_year_overlay,
+)
 
 # ─── Theme ────────────────────────────────────────────────────
 BG          = "#06070A"
@@ -235,13 +242,13 @@ def cached_history() -> pd.DataFrame:
     return fetch_history()
 
 
-@st.cache_data(ttl=60 * 30, show_spinner="Running blind backtest on the last 365 days…")
+@st.cache_data(ttl=60 * 30, show_spinner="Running blind backtest on the last 12 months…")
 def cached_backtest(df: pd.DataFrame):
     backtest, metrics = blind_backtest(df)
     return backtest, metrics
 
 
-@st.cache_data(ttl=60 * 30, show_spinner="Projecting 180 days forward…")
+@st.cache_data(ttl=60 * 30, show_spinner="Projecting 6 months forward…")
 def cached_forecast(df: pd.DataFrame) -> pd.DataFrame:
     return forward_forecast(df)
 
@@ -377,8 +384,8 @@ def main_chart(df: pd.DataFrame, forward: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def backtest_chart(backtest: pd.DataFrame) -> go.Figure:
-    # Clip the band so a 365-day Prophet upper bound doesn't squash the y-axis.
+def backtest_chart(backtest: pd.DataFrame, prior: pd.DataFrame | None = None) -> go.Figure:
+    # Clip the band so the Prophet 12-month upper bound doesn't squash the y-axis.
     ys = pd.concat([backtest["y"], backtest["yhat"]])
     span = ys.max() - ys.min()
     clip_max = ys.max() + span * 0.55
@@ -402,14 +409,22 @@ def backtest_chart(backtest: pd.DataFrame) -> go.Figure:
         mode="lines",
         line=dict(color=BLUE, width=1.8, dash="dash", shape="spline", smoothing=0.4),
         name="Predicted",
-        hovertemplate="<b>%{x|%b %-d, %Y}</b><br>$%{y:,.0f}<extra></extra>",
+        hovertemplate="<b>%{x|%b %Y}</b><br>$%{y:,.0f}<extra></extra>",
     ))
+    if prior is not None and not prior.empty:
+        fig.add_trace(go.Scatter(
+            x=prior["ds"], y=prior["y_prior"],
+            mode="lines",
+            line=dict(color="rgba(244,244,246,0.45)", width=1.6, dash="dot", shape="spline", smoothing=0.4),
+            name="Same period · prior year",
+            hovertemplate="<b>%{x|%b %Y}</b> (prior year)<br>$%{y:,.0f}<extra></extra>",
+        ))
     fig.add_trace(go.Scatter(
         x=backtest["ds"], y=backtest["y"],
         mode="lines",
         line=dict(color=GOLD, width=2.6, shape="spline", smoothing=0.4),
         name="Actual",
-        hovertemplate="<b>%{x|%b %-d, %Y}</b><br>$%{y:,.0f}<extra></extra>",
+        hovertemplate="<b>%{x|%b %Y}</b><br>$%{y:,.0f}<extra></extra>",
     ))
 
     fig.update_layout(**base_layout(height=440))
@@ -431,14 +446,15 @@ def kpi(label: str, value: str, meta_html: str = "") -> str:
 df = cached_history()
 backtest, metrics = cached_backtest(df)
 forward = cached_forecast(df)
+prior = prior_year_overlay(df, backtest)
 
 last_close = float(df["y"].iloc[-1])
 prev_close = float(df["y"].iloc[-2])
 day_delta = ((last_close - prev_close) / prev_close) * 100
 
-f90 = forward.iloc[min(89, len(forward) - 1)]
-f90_val = float(f90["yhat"])
-f90_delta = ((f90_val - last_close) / last_close) * 100
+f_end = forward.iloc[-1]
+f_end_val = float(f_end["yhat"])
+f_end_delta = ((f_end_val - last_close) / last_close) * 100
 
 data_end = pd.Timestamp(df["ds"].iloc[-1])
 data_start = pd.Timestamp(df["ds"].iloc[0])
@@ -464,7 +480,7 @@ st.markdown(
 <div>
   <span class="hero-eyebrow">Time-series forecast · Facebook Prophet</span>
   <h1 class="hero-title">Predicting Bitcoin's next <em>direction</em>.</h1>
-  <p class="hero-sub">A blind out-of-sample backtest on the last {HOLDOUT_DAYS} days of <span class="mono">BTC-USD</span>, with a forward 180-day projection generated from the full price history.</p>
+  <p class="hero-sub">A blind out-of-sample backtest on the last {HOLDOUT_MONTHS} months of <span class="mono">BTC-USD</span> monthly-average prices, with a forward {FUTURE_MONTHS}-month projection generated from the full price history.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -486,23 +502,23 @@ c1.markdown(
     unsafe_allow_html=True,
 )
 
-f_arrow = "▲" if f90_delta >= 0 else "▼"
-f_class = "up" if f90_delta >= 0 else "down"
+f_arrow = "▲" if f_end_delta >= 0 else "▼"
+f_class = "up" if f_end_delta >= 0 else "down"
 c2.markdown(
     kpi(
-        "90-day forecast",
-        fmt_usd(f90_val),
-        f'<span class="{f_class}">{f_arrow} {abs(f90_delta):.2f}%</span> &nbsp;·&nbsp; by {pd.Timestamp(f90["ds"]).strftime("%b %Y")}',
+        f"{FUTURE_MONTHS}-month forecast",
+        fmt_usd(f_end_val),
+        f'<span class="{f_class}">{f_arrow} {abs(f_end_delta):.2f}%</span> &nbsp;·&nbsp; by {pd.Timestamp(f_end["ds"]).strftime("%b %Y")}',
     ),
     unsafe_allow_html=True,
 )
 
 c3.markdown(
-    kpi("Backtest MAPE", fmt_pct(metrics["mape"]), f"on {metrics['n_test_points']} held-out days"),
+    kpi("Backtest MAPE", fmt_pct(metrics["mape"]), f"on {metrics['n_test_points']} held-out months"),
     unsafe_allow_html=True,
 )
 c4.markdown(
-    kpi("Direction accuracy", fmt_pct(metrics["directional_accuracy"]), "daily up / down hit-rate"),
+    kpi("Direction accuracy", fmt_pct(metrics["directional_accuracy"]), "month-over-month hit-rate"),
     unsafe_allow_html=True,
 )
 
@@ -510,11 +526,11 @@ c4.markdown(
 st.write("")
 st.write("")
 st.markdown(
-    """
+    f"""
 <div>
   <span class="eyebrow-sm">01 — Long view</span>
   <h2 class="section-h">All-time price &amp; forward projection</h2>
-  <p class="section-sub">Last 3 years of BTC-USD plotted on a logarithmic scale, extended by Prophet's 180-day forecast and 80% uncertainty band.</p>
+  <p class="section-sub">Monthly-average BTC-USD plotted on a logarithmic scale, extended by Prophet's {FUTURE_MONTHS}-month forecast and 80% uncertainty band.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -530,21 +546,21 @@ st.markdown(
     f"""
 <div>
   <span class="eyebrow-sm">02 — Blind backtest</span>
-  <h2 class="section-h">Last {HOLDOUT_DAYS} days · prediction vs reality</h2>
+  <h2 class="section-h">Last {HOLDOUT_MONTHS} months · prediction vs reality</h2>
   <p class="section-sub">Prophet was trained <em>only</em> on data before this window, then asked to predict it cold. No look-ahead, no re-training, no leakage.</p>
 </div>
 """,
     unsafe_allow_html=True,
 )
 st.markdown('<div class="chart-wrap">', unsafe_allow_html=True)
-st.plotly_chart(backtest_chart(backtest), use_container_width=True, config={"displayModeBar": False})
+st.plotly_chart(backtest_chart(backtest, prior), use_container_width=True, config={"displayModeBar": False})
 st.markdown("</div>", unsafe_allow_html=True)
 
 m1, m2, m3, m4 = st.columns(4, gap="small")
 m1.markdown(kpi("MAE", fmt_usd(metrics["mae"]), "mean absolute error"), unsafe_allow_html=True)
 m2.markdown(kpi("RMSE", fmt_usd(metrics["rmse"]), "root-mean-squared error"), unsafe_allow_html=True)
 m3.markdown(kpi("MAPE", fmt_pct(metrics["mape"]), "mean absolute % error"), unsafe_allow_html=True)
-m4.markdown(kpi("Direction", fmt_pct(metrics["directional_accuracy"]), "daily up/down hit-rate"), unsafe_allow_html=True)
+m4.markdown(kpi("Direction", fmt_pct(metrics["directional_accuracy"]), "month-over-month hit-rate"), unsafe_allow_html=True)
 
 # ─── Methodology ──────────────────────────────────────────────
 st.write("")
@@ -565,11 +581,11 @@ with right:
     st.markdown(
         f"""
 <div>
-  <div class="step"><span class="step-num">01</span><div><strong>Fetch</strong><span class="body">All-time daily BTC-USD closes from Yahoo Finance ({len(df):,} observations since {fmt_date(data_start)}).</span></div></div>
-  <div class="step"><span class="step-num">02</span><div><strong>Hold out</strong><span class="body">Last {HOLDOUT_DAYS} days are removed from the training set and never seen by the model.</span></div></div>
+  <div class="step"><span class="step-num">01</span><div><strong>Fetch</strong><span class="body">Daily BTC-USD closes from Yahoo Finance, resampled to monthly averages ({len(df)} months since {fmt_date(data_start)}).</span></div></div>
+  <div class="step"><span class="step-num">02</span><div><strong>Hold out</strong><span class="body">Last {HOLDOUT_MONTHS} months are removed from the training set and never seen by the model.</span></div></div>
   <div class="step"><span class="step-num">03</span><div><strong>Fit</strong><span class="body">Prophet trained on log-prices with yearly seasonality and a flexible changepoint prior.</span></div></div>
   <div class="step"><span class="step-num">04</span><div><strong>Score</strong><span class="body">Predictions over the held-out window scored on MAE, RMSE, MAPE, and directional hit-rate.</span></div></div>
-  <div class="step"><span class="step-num">05</span><div><strong>Project</strong><span class="body">Re-fit on the full series, project 180 days forward with an 80% uncertainty band.</span></div></div>
+  <div class="step"><span class="step-num">05</span><div><strong>Project</strong><span class="body">Re-fit on the full series, project {FUTURE_MONTHS} months forward with an 80% uncertainty band.</span></div></div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -583,7 +599,7 @@ with left:
     st.markdown(
         f"""
 <div class="footer">
-  <div>{fmt_date(data_start)} → {fmt_date(data_end)} · {len(df):,} daily observations</div>
+  <div>{fmt_date(data_start)} → {fmt_date(data_end)} · {len(df)} monthly observations</div>
   <div>Source: Yahoo Finance · Model: Prophet · Generated {fmt_date(generated)}</div>
 </div>
 """,

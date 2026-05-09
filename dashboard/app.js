@@ -89,14 +89,14 @@ function paintKPIs(data) {
     `</span>` +
     ` &nbsp;·&nbsp; ${fmtDate(m.data_end)}`;
 
-  const f90 = data.forecast[Math.min(89, data.forecast.length - 1)];
-  $('#kpi-forecast').textContent = fmtUSD0(f90.yhat);
-  const fdelta = ((f90.yhat - last) / last) * 100;
+  const fEnd = data.forecast[data.forecast.length - 1];
+  $('#kpi-forecast').textContent = fmtUSD0(fEnd.yhat);
+  const fdelta = ((fEnd.yhat - last) / last) * 100;
   $('#kpi-forecast-meta').innerHTML =
     `<span class="${fdelta >= 0 ? 'up' : 'down'}">` +
     `<span class="arrow">${fdelta >= 0 ? '▲' : '▼'}</span>${Math.abs(fdelta).toFixed(2)}%` +
     `</span>` +
-    ` &nbsp;·&nbsp; by ${fmtMonth(f90.ds)}`;
+    ` &nbsp;·&nbsp; by ${fmtMonth(fEnd.ds)}`;
 
   $('#kpi-mape').textContent = fmtPct(data.backtest.metrics.mape);
   $('#kpi-dir').textContent = fmtPct(data.backtest.metrics.directional_accuracy);
@@ -260,20 +260,22 @@ function renderBacktestChart(data) {
   }));
   const predicted = preds.map((d) => ({ x: ms(d.ds), y: d.yhat }));
   const actual    = preds.map((d) => ({ x: ms(d.ds), y: d.y }));
+  const priorYear = (data.backtest.prior_year || []).map((d) => ({ x: ms(d.ds), y: d.y_prior }));
 
   const opts = {
     ...commonOpts(),
     chart: { ...commonOpts().chart, id: 'backtest', type: 'rangeArea', height: 440 },
     series: [
-      { name: '80% range', type: 'rangeArea', data: band      },
-      { name: 'Predicted', type: 'line',      data: predicted },
-      { name: 'Actual',    type: 'line',      data: actual    },
+      { name: '80% range',      type: 'rangeArea', data: band      },
+      { name: 'Predicted',      type: 'line',      data: predicted },
+      { name: 'Same period last year', type: 'line', data: priorYear },
+      { name: 'Actual',         type: 'line',      data: actual    },
     ],
-    colors: [COLORS.blue, COLORS.blue, COLORS.gold],
-    stroke: { curve: 'smooth', width: [0, 1.8, 2.6], dashArray: [0, 5, 0] },
+    colors: [COLORS.blue, COLORS.blue, 'rgba(244,244,246,0.45)', COLORS.gold],
+    stroke: { curve: 'smooth', width: [0, 1.8, 1.6, 2.6], dashArray: [0, 5, 2, 0] },
     fill: {
-      type: ['solid', 'solid', 'solid'],
-      opacity: [0.14, 1, 1],
+      type: ['solid', 'solid', 'solid', 'solid'],
+      opacity: [0.14, 1, 1, 1],
     },
     markers: { size: 0, hover: { size: 5 } },
   };

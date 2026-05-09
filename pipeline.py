@@ -1,11 +1,12 @@
 """BTC price-direction forecast pipeline.
 
 Steps:
-  1. Fetch all-time BTC-USD daily history from Yahoo Finance.
-  2. Hold out the last 365 days as a blind test set.
+  1. Fetch all-time BTC-USD daily history from Yahoo Finance, resample to
+     monthly average closing price.
+  2. Hold out the last 12 months as a blind test set.
   3. Train Prophet on data strictly before the test window.
   4. Predict the test window, score MAE / RMSE / MAPE / directional accuracy.
-  5. Re-train on the full history and project 180 days forward.
+  5. Re-train on the full history and project 6 months forward.
   6. Export everything the dashboard needs as dashboard/data.json.
 """
 
@@ -36,12 +37,12 @@ DATA_DIR.mkdir(exist_ok=True)
 DASH_DIR.mkdir(exist_ok=True)
 
 TICKER = "BTC-USD"
-HOLDOUT_DAYS = 365
-FUTURE_DAYS = 180
+HOLDOUT_MONTHS = 12
+FUTURE_MONTHS = 6
 
 
 def fetch_history() -> pd.DataFrame:
-    print(f"[1/5] Fetching {TICKER} all-time daily history…")
+    print(f"[1/5] Fetching {TICKER} all-time daily history → monthly average…")
     df = yf.download(
         TICKER,
         start="2014-09-17",
@@ -60,19 +61,35 @@ def fetch_history() -> pd.DataFrame:
     df = df.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
     df["ds"] = pd.to_datetime(df["ds"]).dt.tz_localize(None)
     df = df.dropna().sort_values("ds").reset_index(drop=True)
-    df.to_csv(DATA_DIR / "btc_history.csv", index=False)
-    print(f"      → {len(df):,} rows from {df['ds'].min().date()} to {df['ds'].max().date()}")
-    return df
+
+    # Resample to monthly average closing price (month-start labels).
+    monthly = (
+        df.set_index("ds")["y"]
+          .resample("MS")
+          .mean()
+          .dropna()
+          .reset_index()
+    )
+    # Drop the most recent month if it's still partial — only keep complete months
+    # whose close-month boundary has passed. We compare the next month-start to today.
+    today = pd.Timestamp(datetime.now(timezone.utc).date())
+    last_month_start = monthly["ds"].iloc[-1]
+    next_month_start = (last_month_start + pd.offsets.MonthBegin(1))
+    if next_month_start > today:
+        monthly = monthly.iloc[:-1].reset_index(drop=True)
+
+    monthly.to_csv(DATA_DIR / "btc_history.csv", index=False)
+    print(f"      → {len(monthly):,} monthly rows from {monthly['ds'].min().date()} to {monthly['ds'].max().date()}")
+    return monthly
 
 
 def make_model() -> Prophet:
     # BTC spans 4+ orders of magnitude over 11 years, so we model in log-space
-    # and exponentiate the predictions back. This is the standard treatment for
-    # multiplicative-growth price series and dramatically improves MAPE versus
-    # fitting on raw dollars.
+    # and exponentiate the predictions back. With monthly data we don't have
+    # daily/weekly seasonality to model — only the yearly cycle is meaningful.
     return Prophet(
         daily_seasonality=False,
-        weekly_seasonality=False,  # BTC trades 24/7 — no weekend effect to model
+        weekly_seasonality=False,
         yearly_seasonality=True,
         changepoint_prior_scale=0.15,
         changepoint_range=0.95,
@@ -101,15 +118,14 @@ def predict_exp(model: Prophet, future: pd.DataFrame) -> pd.DataFrame:
 
 
 def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    cutoff = df["ds"].max() - pd.Timedelta(days=HOLDOUT_DAYS)
-    train = df[df["ds"] <= cutoff].copy()
-    test = df[df["ds"] > cutoff].copy()
+    train = df.iloc[:-HOLDOUT_MONTHS].copy()
+    test = df.iloc[-HOLDOUT_MONTHS:].copy()
 
-    print(f"[2/5] Backtest split: train {len(train):,} rows  ·  test {len(test):,} rows (>{cutoff.date()})")
+    print(f"[2/5] Backtest split: train {len(train)} months  ·  test {len(test)} months (>{train['ds'].iloc[-1].date()})")
     print(f"[3/5] Training Prophet (log-space) on training set…")
     model = fit_log(train)
 
-    future = model.make_future_dataframe(periods=HOLDOUT_DAYS + 30, freq="D")
+    future = model.make_future_dataframe(periods=HOLDOUT_MONTHS + 3, freq="MS")
     forecast = predict_exp(model, future)
 
     merged = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].merge(test, on="ds", how="inner")
@@ -118,7 +134,7 @@ def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     rmse = float(np.sqrt((err ** 2).mean()))
     mape = float((err.abs() / merged["y"]).mean() * 100)
 
-    # Directional accuracy: did the model get the daily up/down right?
+    # Directional accuracy: did the model get the month-over-month up/down right?
     actual_dir = (merged["y"].diff() > 0).astype(int)
     pred_dir = (merged["yhat"].diff() > 0).astype(int)
     direction_match = (actual_dir == pred_dir).iloc[1:]
@@ -141,9 +157,9 @@ def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
 
 def forward_forecast(df: pd.DataFrame) -> pd.DataFrame:
-    print(f"[4/5] Re-training on full history (log-space), projecting {FUTURE_DAYS} days forward…")
+    print(f"[4/5] Re-training on full history (log-space), projecting {FUTURE_MONTHS} months forward…")
     model = fit_log(df)
-    future = model.make_future_dataframe(periods=FUTURE_DAYS, freq="D")
+    future = model.make_future_dataframe(periods=FUTURE_MONTHS, freq="MS")
     forecast = predict_exp(model, future)
     last = df["ds"].max()
     forward = forecast[forecast["ds"] > last][["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
@@ -161,16 +177,33 @@ def to_record(df: pd.DataFrame, cols: list[str]) -> list[dict]:
     return out.to_dict(orient="records")
 
 
+def prior_year_overlay(df: pd.DataFrame, backtest: pd.DataFrame) -> pd.DataFrame:
+    """Return the BTC monthly average for the 12 months immediately before the
+    blind-test window, with `ds` shifted forward by one year so the points
+    line up on the same x-axis as the test window. Lets the dashboard plot a
+    same-period-last-year overlay against actual + predicted.
+    """
+    test_start = pd.Timestamp(backtest["ds"].min())
+    prior_start = test_start - pd.DateOffset(years=1)
+    prior_end = test_start - pd.DateOffset(months=1)
+    prior = df[(df["ds"] >= prior_start) & (df["ds"] <= prior_end)].copy()
+    prior["ds"] = prior["ds"] + pd.DateOffset(years=1)
+    prior = prior.rename(columns={"y": "y_prior"})
+    return prior[["ds", "y_prior"]]
+
+
 def main() -> None:
     df = fetch_history()
     backtest, metrics = blind_backtest(df)
     forward = forward_forecast(df)
+    prior = prior_year_overlay(df, backtest)
 
     print("[5/5] Writing dashboard/data.json…")
     payload = {
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "ticker": TICKER,
+            "frequency": "monthly_avg",
             "data_start": str(df["ds"].min().date()),
             "data_end": str(df["ds"].max().date()),
             "n_observations": int(len(df)),
@@ -178,14 +211,13 @@ def main() -> None:
             "previous_close": float(df["y"].iloc[-2]),
             "all_time_high": float(df["y"].max()),
             "all_time_high_date": str(df.loc[df["y"].idxmax(), "ds"].date()),
-            "holdout_days": HOLDOUT_DAYS,
-            "future_days": FUTURE_DAYS,
+            "holdout_months": HOLDOUT_MONTHS,
+            "future_months": FUTURE_MONTHS,
         },
-        # Down-sample weekly for the long history view to keep JSON small,
-        # but keep the last year at daily resolution.
         "history": to_record(df, ["ds", "y"]),
         "backtest": {
             "predictions": to_record(backtest, ["ds", "y", "yhat", "yhat_lower", "yhat_upper"]),
+            "prior_year": to_record(prior, ["ds", "y_prior"]),
             "metrics": metrics,
         },
         "forecast": to_record(forward, ["ds", "yhat", "yhat_lower", "yhat_upper"]),
