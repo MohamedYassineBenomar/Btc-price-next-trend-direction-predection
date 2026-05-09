@@ -40,23 +40,45 @@ HOLDOUT_DAYS = 365     # 1-year blind test
 FUTURE_DAYS = 180      # 6-month forward forecast
 
 
+def _from_cache() -> pd.DataFrame | None:
+    """Load the previously-fetched CSV if it exists. Used as a fallback when
+    Streamlit Cloud's network can't reach Yahoo Finance."""
+    cache = DATA_DIR / "btc_history.csv"
+    if not cache.exists():
+        return None
+    df = pd.read_csv(cache)
+    df["ds"] = pd.to_datetime(df["ds"])
+    return df
+
+
 def fetch_history() -> pd.DataFrame:
     print(f"[1/5] Fetching {TICKER} all-time daily history…")
-    df = yf.download(
-        TICKER,
-        start="2014-09-17",
-        end=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        interval="1d",
-        progress=False,
-        auto_adjust=False,
-    )
-    if df.empty:
-        sys.exit("ERROR: yfinance returned no data — check network access.")
+    try:
+        raw = yf.download(
+            TICKER,
+            start="2014-09-17",
+            end=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+        )
+    except Exception as e:
+        print(f"      ! yfinance error: {e}")
+        raw = pd.DataFrame()
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+    if raw.empty:
+        cached = _from_cache()
+        if cached is None or cached.empty:
+            raise RuntimeError(
+                "yfinance returned no data and no cached btc_history.csv is available."
+            )
+        print(f"      → falling back to cache ({len(cached):,} rows)")
+        return cached
 
-    df = df.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.get_level_values(0)
+
+    df = raw.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
     df["ds"] = pd.to_datetime(df["ds"]).dt.tz_localize(None)
     df = df.dropna().sort_values("ds").reset_index(drop=True)
 
@@ -102,7 +124,9 @@ def predict_exp(model: Prophet, future: pd.DataFrame) -> pd.DataFrame:
 
 def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     if len(df) <= HOLDOUT_DAYS:
-        sys.exit(f"ERROR: only {len(df)} rows but need > {HOLDOUT_DAYS} for the holdout split.")
+        raise RuntimeError(
+            f"Only {len(df)} rows but need > {HOLDOUT_DAYS} for the holdout split."
+        )
 
     cutoff = df["ds"].max() - pd.Timedelta(days=HOLDOUT_DAYS)
     train = df[df["ds"] <= cutoff].copy()

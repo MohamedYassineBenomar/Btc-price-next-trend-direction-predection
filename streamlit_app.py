@@ -440,10 +440,19 @@ def kpi(label: str, value: str, meta_html: str = "") -> str:
 
 
 # ─── Render ───────────────────────────────────────────────────
-df = cached_history()
-backtest, metrics = cached_backtest(df)
-forward = cached_forecast(df)
-prior = prior_year_overlay(df, backtest)
+try:
+    df = cached_history()
+    backtest, metrics = cached_backtest(df)
+    forward = cached_forecast(df)
+    prior = prior_year_overlay(df, backtest)
+except Exception as e:
+    st.error(
+        f"Pipeline failed to start. This is usually a transient yfinance "
+        f"network issue on Streamlit Cloud — try the **↻ Refresh data** "
+        f"button (top-right) or wait a minute and reload. \n\n"
+        f"Underlying error: `{type(e).__name__}: {e}`"
+    )
+    st.stop()
 
 last_close = float(df["y"].iloc[-1])
 prev_close = float(df["y"].iloc[-2])
