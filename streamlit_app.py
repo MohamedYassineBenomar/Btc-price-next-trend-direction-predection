@@ -16,8 +16,6 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from pipeline import (
-    FUTURE_MONTHS,
-    HOLDOUT_MONTHS,
     blind_backtest,
     fetch_history,
     forward_forecast,
@@ -242,13 +240,13 @@ def cached_history() -> pd.DataFrame:
     return fetch_history()
 
 
-@st.cache_data(ttl=60 * 30, show_spinner="Running blind backtest on the last 12 months…")
+@st.cache_data(ttl=60 * 30, show_spinner="Running blind backtest on the last 24 periods (≈ 12 months)…")
 def cached_backtest(df: pd.DataFrame):
     backtest, metrics = blind_backtest(df)
     return backtest, metrics
 
 
-@st.cache_data(ttl=60 * 30, show_spinner="Projecting 6 months forward…")
+@st.cache_data(ttl=60 * 30, show_spinner="Projecting ~6 months forward…")
 def cached_forecast(df: pd.DataFrame) -> pd.DataFrame:
     return forward_forecast(df)
 
@@ -462,7 +460,7 @@ st.markdown(
 <div>
   <span class="hero-eyebrow">Time-series forecast · Facebook Prophet</span>
   <h1 class="hero-title">Predicting Bitcoin's next <em>direction</em>.</h1>
-  <p class="hero-sub">A blind out-of-sample backtest on the last {HOLDOUT_MONTHS} months of <span class="mono">BTC-USD</span> monthly-average prices, with a forward {FUTURE_MONTHS}-month projection generated from the full price history.</p>
+  <p class="hero-sub">A blind out-of-sample backtest on the last 12 months of <span class="mono">BTC-USD</span> 15-day average prices, with a forward 6-month projection generated from the full price history.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -488,7 +486,7 @@ f_arrow = "▲" if f_end_delta >= 0 else "▼"
 f_class = "up" if f_end_delta >= 0 else "down"
 c2.markdown(
     kpi(
-        f"{FUTURE_MONTHS}-month forecast",
+        "6-month forecast",
         fmt_usd(f_end_val),
         f'<span class="{f_class}">{f_arrow} {abs(f_end_delta):.2f}%</span> &nbsp;·&nbsp; by {pd.Timestamp(f_end["ds"]).strftime("%b %Y")}',
     ),
@@ -496,11 +494,11 @@ c2.markdown(
 )
 
 c3.markdown(
-    kpi("Backtest MAPE", fmt_pct(metrics["mape"]), f"on {metrics['n_test_points']} held-out months"),
+    kpi("Backtest MAPE", fmt_pct(metrics["mape"]), f"on {metrics['n_test_points']} held-out 15-day periods"),
     unsafe_allow_html=True,
 )
 c4.markdown(
-    kpi("Direction accuracy", fmt_pct(metrics["directional_accuracy"]), "month-over-month hit-rate"),
+    kpi("Direction accuracy", fmt_pct(metrics["directional_accuracy"]), "period-over-period hit-rate"),
     unsafe_allow_html=True,
 )
 
@@ -512,7 +510,7 @@ st.markdown(
 <div>
   <span class="eyebrow-sm">01 — Long view</span>
   <h2 class="section-h">All-time price &amp; forward projection</h2>
-  <p class="section-sub">Monthly-average BTC-USD plotted on a logarithmic scale, extended by Prophet's {FUTURE_MONTHS}-month forecast and 80% uncertainty band.</p>
+  <p class="section-sub">15-day average BTC-USD plotted on a logarithmic scale, extended by Prophet's 6-month forecast and 80% uncertainty band.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -528,7 +526,7 @@ st.markdown(
     f"""
 <div>
   <span class="eyebrow-sm">02 — Blind backtest</span>
-  <h2 class="section-h">Last {HOLDOUT_MONTHS} months · prediction vs reality</h2>
+  <h2 class="section-h">Last 12 months · prediction vs reality</h2>
   <p class="section-sub">Prophet was trained <em>only</em> on data before this window, then asked to predict it cold. No look-ahead, no re-training, no leakage.</p>
 </div>
 """,
@@ -542,7 +540,7 @@ m1, m2, m3, m4 = st.columns(4, gap="small")
 m1.markdown(kpi("MAE", fmt_usd(metrics["mae"]), "mean absolute error"), unsafe_allow_html=True)
 m2.markdown(kpi("RMSE", fmt_usd(metrics["rmse"]), "root-mean-squared error"), unsafe_allow_html=True)
 m3.markdown(kpi("MAPE", fmt_pct(metrics["mape"]), "mean absolute % error"), unsafe_allow_html=True)
-m4.markdown(kpi("Direction", fmt_pct(metrics["directional_accuracy"]), "month-over-month hit-rate"), unsafe_allow_html=True)
+m4.markdown(kpi("Direction", fmt_pct(metrics["directional_accuracy"]), "period-over-period hit-rate"), unsafe_allow_html=True)
 
 # ─── Methodology ──────────────────────────────────────────────
 st.write("")
@@ -563,11 +561,11 @@ with right:
     st.markdown(
         f"""
 <div>
-  <div class="step"><span class="step-num">01</span><div><strong>Fetch</strong><span class="body">Daily BTC-USD closes from Yahoo Finance, resampled to monthly averages ({len(df)} months since {fmt_date(data_start)}).</span></div></div>
-  <div class="step"><span class="step-num">02</span><div><strong>Hold out</strong><span class="body">Last {HOLDOUT_MONTHS} months are removed from the training set and never seen by the model.</span></div></div>
+  <div class="step"><span class="step-num">01</span><div><strong>Fetch</strong><span class="body">Daily BTC-USD closes from Yahoo Finance, resampled to 15-day averages ({len(df)} periods since {fmt_date(data_start)}).</span></div></div>
+  <div class="step"><span class="step-num">02</span><div><strong>Hold out</strong><span class="body">Last 24 periods (~12 months) are removed from the training set and never seen by the model.</span></div></div>
   <div class="step"><span class="step-num">03</span><div><strong>Fit</strong><span class="body">Prophet trained on log-prices with yearly seasonality and a flexible changepoint prior.</span></div></div>
   <div class="step"><span class="step-num">04</span><div><strong>Score</strong><span class="body">Predictions over the held-out window scored on MAE, RMSE, MAPE, and directional hit-rate.</span></div></div>
-  <div class="step"><span class="step-num">05</span><div><strong>Project</strong><span class="body">Re-fit on the full series, project {FUTURE_MONTHS} months forward with an 80% uncertainty band.</span></div></div>
+  <div class="step"><span class="step-num">05</span><div><strong>Project</strong><span class="body">Re-fit on the full series, project 12 periods (~6 months) forward with an 80% uncertainty band.</span></div></div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -581,7 +579,7 @@ with left:
     st.markdown(
         f"""
 <div class="footer">
-  <div>{fmt_date(data_start)} → {fmt_date(data_end)} · {len(df)} monthly observations</div>
+  <div>{fmt_date(data_start)} → {fmt_date(data_end)} · {len(df)} 15-day observations</div>
   <div>Source: Yahoo Finance · Model: Prophet · Generated {fmt_date(generated)}</div>
 </div>
 """,

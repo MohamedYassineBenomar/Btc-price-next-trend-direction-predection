@@ -41,7 +41,7 @@
     <header class="hero">
       <span class="eyebrow">Time-series forecast · Facebook Prophet</span>
       <h1 class="reveal">Predicting Bitcoin's next <em>direction</em>.</h1>
-      <p class="hero-sub reveal">A blind out-of-sample backtest on the last 12 months of <span class="mono">BTC-USD</span> monthly-average prices, with a forward 6-month projection generated from the full price history.</p>
+      <p class="hero-sub reveal">A blind out-of-sample backtest on the last 12 months of <span class="mono">BTC-USD</span> 15-day average prices, with a forward 6-month projection generated from the full price history.</p>
 
       <div class="kpis">
         <div class="kpi reveal">
@@ -57,12 +57,12 @@
         <div class="kpi reveal">
           <div class="kpi-label">Backtest MAPE</div>
           <div class="kpi-value" id="kpi-mape">—</div>
-          <div class="kpi-meta">on 12 held-out months</div>
+          <div class="kpi-meta">on 24 held-out 15-day periods</div>
         </div>
         <div class="kpi reveal">
           <div class="kpi-label">Direction accuracy</div>
           <div class="kpi-value" id="kpi-dir">—</div>
-          <div class="kpi-meta">month-over-month hit-rate</div>
+          <div class="kpi-meta">period-over-period hit-rate</div>
         </div>
       </div>
     </header>
@@ -72,7 +72,7 @@
         <div>
           <span class="eyebrow eyebrow-sm">01 — Long view</span>
           <h2>All-time price &amp; forward projection</h2>
-          <p class="section-sub">Monthly-average BTC-USD since September 2014, plotted on a logarithmic scale, extended by Prophet's 6-month forecast and 80% uncertainty band.</p>
+          <p class="section-sub">15-day average BTC-USD since September 2014, plotted on a logarithmic scale, extended by Prophet's 6-month forecast and 80% uncertainty band.</p>
         </div>
         <div class="chart-toggle" id="range-toggle" role="tablist" aria-label="Time range">
           <button data-range="1y" role="tab" aria-selected="false">1Y</button>
@@ -124,7 +124,7 @@
           <div class="metric">
             <div class="metric-label">Direction</div>
             <div class="metric-value" id="m-dir">—</div>
-            <div class="metric-foot">month-over-month hit-rate</div>
+            <div class="metric-foot">period-over-period hit-rate</div>
           </div>
         </div>
       </div>
@@ -137,8 +137,8 @@
           <h3>Honest, reproducible, no leakage.</h3>
         </div>
         <ol class="method-steps">
-          <li><span class="step-num">01</span><div><strong>Fetch</strong><span>Daily BTC-USD closes from Yahoo Finance, resampled to a monthly average (~140 monthly observations since 2014-09).</span></div></li>
-          <li><span class="step-num">02</span><div><strong>Hold out</strong><span>Last 12 months are removed from the training set and never seen by the model.</span></div></li>
+          <li><span class="step-num">01</span><div><strong>Fetch</strong><span>Daily BTC-USD closes from Yahoo Finance, resampled to 15-day averages (~283 observations since 2014-09).</span></div></li>
+          <li><span class="step-num">02</span><div><strong>Hold out</strong><span>Last 24 periods (~12 months) are removed from the training set and never seen by the model.</span></div></li>
           <li><span class="step-num">03</span><div><strong>Fit</strong><span>Prophet trained on log-prices with yearly seasonality and a flexible changepoint prior.</span></div></li>
           <li><span class="step-num">04</span><div><strong>Score</strong><span>Predictions over the held-out window scored on MAE, RMSE, MAPE, and directional hit-rate.</span></div></li>
           <li><span class="step-num">05</span><div><strong>Project</strong><span>Re-fit on the full series, project 6 months forward with an 80% uncertainty band.</span></div></li>
@@ -148,7 +148,7 @@
 
     <footer>
       <div>
-        <span id="data-range">—</span> · <span id="n-obs">—</span> monthly observations
+        <span id="data-range">—</span> · <span id="n-obs">—</span> 15-day observations
       </div>
       <div class="foot-right">
         <span>Source: Yahoo Finance</span>
