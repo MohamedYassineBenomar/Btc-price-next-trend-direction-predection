@@ -196,9 +196,9 @@ function renderMainChart(data) {
   const lastHist = data.history[data.history.length - 1];
   const lastMs = ms(lastHist.ds);
 
-  // Default visible window: last ~3 months so the 30-day forecast at the
+  // Default visible window: last ~3 years so the 180-day forecast at the
   // right edge is clearly readable. User can zoom out via the toggle.
-  const windowStartMs = lastMs - 90 * 24 * 60 * 60 * 1000;
+  const windowStartMs = lastMs - 3 * 365 * 24 * 60 * 60 * 1000;
   const histPoints = data.history.map((d) => ({ x: ms(d.ds), y: d.y }));
   const forwardLine = [
     { x: lastMs, y: lastHist.y },
@@ -329,10 +329,10 @@ function wireScaleToggle(chart) {
     const ctx = chart.__btc;
     if (!ctx) return;
     const lastForecastMs = ctx.forwardLine[ctx.forwardLine.length - 1].x;
-    const dayMs = 24 * 60 * 60 * 1000;
+    const yearMs = 365 * 24 * 60 * 60 * 1000;
     const min = range === 'all' ? ctx.allHistMs[0]
-              : range === '1m'  ? ctx.lastMs - 30 * dayMs
-              : ctx.lastMs - 90 * dayMs;
+              : range === '1y'  ? ctx.lastMs - yearMs
+              : ctx.lastMs - 3 * yearMs;
     chart.updateOptions(
       { xaxis: { min, max: lastForecastMs } },
       false,

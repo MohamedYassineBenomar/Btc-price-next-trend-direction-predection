@@ -1,12 +1,11 @@
 """BTC price-direction forecast pipeline.
 
 Steps:
-  1. Fetch the last ~2 years of BTC-USD hourly closes from Yahoo Finance
-     (yfinance caps hourly history at 730 days, so we can't go further).
-  2. Hold out the last 30 days (720 hourly points) as a blind test set.
+  1. Fetch all-time BTC-USD daily closes from Yahoo Finance (since 2014-09-17).
+  2. Hold out the last 365 days as a blind test set.
   3. Train Prophet on data strictly before the test window.
   4. Predict the test window, score MAE / RMSE / MAPE / directional accuracy.
-  5. Re-train on the full history and project 30 days (720 hours) forward.
+  5. Re-train on the full history and project 180 days forward.
   6. Export everything the dashboard needs as dashboard/data.json.
 """
 
@@ -37,16 +36,17 @@ DATA_DIR.mkdir(exist_ok=True)
 DASH_DIR.mkdir(exist_ok=True)
 
 TICKER = "BTC-USD"
-HOLDOUT_HOURS = 24 * 30    # 30 days = 720 hours
-FUTURE_HOURS = 24 * 30     # 30 days forward
+HOLDOUT_DAYS = 365     # 1-year blind test
+FUTURE_DAYS = 180      # 6-month forward forecast
 
 
 def fetch_history() -> pd.DataFrame:
-    print(f"[1/5] Fetching {TICKER} hourly history (last 730 days, yfinance limit)…")
+    print(f"[1/5] Fetching {TICKER} all-time daily history…")
     df = yf.download(
         TICKER,
-        period="730d",
-        interval="1h",
+        start="2014-09-17",
+        end=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        interval="1d",
         progress=False,
         auto_adjust=False,
     )
@@ -56,30 +56,27 @@ def fetch_history() -> pd.DataFrame:
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    df = df.reset_index()
-    # yfinance's hourly index column can be named "Datetime" or "index"
-    ts_col = "Datetime" if "Datetime" in df.columns else df.columns[0]
-    df = df[[ts_col, "Close"]].rename(columns={ts_col: "ds", "Close": "y"})
+    df = df.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
     df["ds"] = pd.to_datetime(df["ds"]).dt.tz_localize(None)
     df = df.dropna().sort_values("ds").reset_index(drop=True)
 
     df.to_csv(DATA_DIR / "btc_history.csv", index=False)
-    print(f"      → {len(df):,} hourly rows from {df['ds'].min()} to {df['ds'].max()}")
+    print(f"      → {len(df):,} daily rows from {df['ds'].min().date()} to {df['ds'].max().date()}")
     return df
 
 
 def make_model() -> Prophet:
-    # Hourly data over ~2 years — daily and weekly seasonality become
-    # meaningful (intraday cycles, weekend effects). Log-space keeps
-    # proportional moves consistent. Yearly seasonality off — we don't have
-    # enough years for the yearly Fourier basis to mean anything.
+    # BTC spans 4+ orders of magnitude over 11 years, so we model in log-space
+    # and exponentiate the predictions back. Yearly seasonality enabled —
+    # 11 years gives the Fourier basis plenty to fit. Weekly off (BTC trades
+    # 24/7, no real weekend effect on daily-bar data).
     return Prophet(
-        daily_seasonality=True,
-        weekly_seasonality=True,
-        yearly_seasonality=False,
-        changepoint_prior_scale=0.1,
+        daily_seasonality=False,
+        weekly_seasonality=False,
+        yearly_seasonality=True,
+        changepoint_prior_scale=0.15,
         changepoint_range=0.95,
-        seasonality_prior_scale=8.0,
+        seasonality_prior_scale=5.0,
         interval_width=0.80,
     )
 
@@ -104,14 +101,18 @@ def predict_exp(model: Prophet, future: pd.DataFrame) -> pd.DataFrame:
 
 
 def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    train = df.iloc[:-HOLDOUT_HOURS].copy()
-    test = df.iloc[-HOLDOUT_HOURS:].copy()
+    if len(df) <= HOLDOUT_DAYS:
+        sys.exit(f"ERROR: only {len(df)} rows but need > {HOLDOUT_DAYS} for the holdout split.")
 
-    print(f"[2/5] Backtest split: train {len(train):,} hours  ·  test {len(test):,} hours (>{train['ds'].iloc[-1]})")
+    cutoff = df["ds"].max() - pd.Timedelta(days=HOLDOUT_DAYS)
+    train = df[df["ds"] <= cutoff].copy()
+    test = df[df["ds"] > cutoff].copy()
+
+    print(f"[2/5] Backtest split: train {len(train):,} days  ·  test {len(test):,} days (>{cutoff.date()})")
     print(f"[3/5] Training Prophet (log-space) on training set…")
     model = fit_log(train)
 
-    future = model.make_future_dataframe(periods=HOLDOUT_HOURS + 24, freq="h")
+    future = model.make_future_dataframe(periods=HOLDOUT_DAYS + 30, freq="D")
     forecast = predict_exp(model, future)
 
     merged = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].merge(test, on="ds", how="inner")
@@ -120,7 +121,7 @@ def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     rmse = float(np.sqrt((err ** 2).mean()))
     mape = float((err.abs() / merged["y"]).mean() * 100)
 
-    # Directional accuracy: did the model get the hour-over-hour up/down right?
+    # Directional accuracy: did the model get the day-over-day up/down right?
     actual_dir = (merged["y"].diff() > 0).astype(int)
     pred_dir = (merged["yhat"].diff() > 0).astype(int)
     direction_match = (actual_dir == pred_dir).iloc[1:]
@@ -131,8 +132,8 @@ def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         "rmse": rmse,
         "mape": mape,
         "directional_accuracy": dir_acc,
-        "test_start": str(merged["ds"].min()),
-        "test_end": str(merged["ds"].max()),
+        "test_start": str(merged["ds"].min().date()),
+        "test_end": str(merged["ds"].max().date()),
         "n_test_points": int(len(merged)),
         "train_size": int(len(train)),
     }
@@ -143,39 +144,24 @@ def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
 
 def forward_forecast(df: pd.DataFrame) -> pd.DataFrame:
-    print(f"[4/5] Re-training on full history (log-space), projecting {FUTURE_HOURS} hours (~{FUTURE_HOURS // 24} days) forward…")
+    print(f"[4/5] Re-training on full history (log-space), projecting {FUTURE_DAYS} days forward…")
     model = fit_log(df)
-    future = model.make_future_dataframe(periods=FUTURE_HOURS, freq="h")
+    future = model.make_future_dataframe(periods=FUTURE_DAYS, freq="D")
     forecast = predict_exp(model, future)
     last = df["ds"].max()
     forward = forecast[forecast["ds"] > last][["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
     return forward
 
 
-def to_record(df: pd.DataFrame, cols: list[str], hourly: bool = False) -> list[dict]:
+def to_record(df: pd.DataFrame, cols: list[str]) -> list[dict]:
     out = df[cols].copy()
     if "ds" in out.columns:
-        fmt = "%Y-%m-%dT%H:00" if hourly else "%Y-%m-%d"
-        out["ds"] = pd.to_datetime(out["ds"]).dt.strftime(fmt)
+        out["ds"] = pd.to_datetime(out["ds"]).dt.strftime("%Y-%m-%d")
     for c in cols:
         if c == "ds":
             continue
         out[c] = out[c].astype(float).round(2)
     return out.to_dict(orient="records")
-
-
-def downsample_daily(df: pd.DataFrame) -> pd.DataFrame:
-    """Daily mean of an hourly series — used so the all-time display chart
-    sends ~730 points instead of ~17k.
-    """
-    daily = (
-        df.set_index("ds")["y"]
-          .resample("1D")
-          .mean()
-          .dropna()
-          .reset_index()
-    )
-    return daily
 
 
 def prior_year_overlay(df: pd.DataFrame, backtest: pd.DataFrame) -> pd.DataFrame:
@@ -204,31 +190,28 @@ def main() -> None:
     prior = prior_year_overlay(df, backtest)
 
     print("[5/5] Writing dashboard/data.json…")
-    daily_history = downsample_daily(df)
     payload = {
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "ticker": TICKER,
-            "frequency": "hourly",
-            "data_start": str(df["ds"].min()),
-            "data_end": str(df["ds"].max()),
+            "frequency": "daily",
+            "data_start": str(df["ds"].min().date()),
+            "data_end": str(df["ds"].max().date()),
             "n_observations": int(len(df)),
             "current_price": float(df["y"].iloc[-1]),
             "previous_close": float(df["y"].iloc[-2]),
             "all_time_high": float(df["y"].max()),
-            "all_time_high_date": str(df.loc[df["y"].idxmax(), "ds"]),
-            "holdout_hours": HOLDOUT_HOURS,
-            "future_hours": FUTURE_HOURS,
+            "all_time_high_date": str(df.loc[df["y"].idxmax(), "ds"].date()),
+            "holdout_days": HOLDOUT_DAYS,
+            "future_days": FUTURE_DAYS,
         },
-        # Daily means for the all-time chart (compact). Charts that need
-        # hourly resolution get hourly data in their own keys below.
-        "history": to_record(daily_history, ["ds", "y"]),
+        "history": to_record(df, ["ds", "y"]),
         "backtest": {
-            "predictions": to_record(backtest, ["ds", "y", "yhat", "yhat_lower", "yhat_upper"], hourly=True),
-            "prior_year": to_record(prior, ["ds", "y_prior"], hourly=True),
+            "predictions": to_record(backtest, ["ds", "y", "yhat", "yhat_lower", "yhat_upper"]),
+            "prior_year": to_record(prior, ["ds", "y_prior"]),
             "metrics": metrics,
         },
-        "forecast": to_record(forward, ["ds", "yhat", "yhat_lower", "yhat_upper"], hourly=True),
+        "forecast": to_record(forward, ["ds", "yhat", "yhat_lower", "yhat_upper"]),
     }
 
     out_path = DASH_DIR / "data.json"

@@ -240,13 +240,13 @@ def cached_history() -> pd.DataFrame:
     return fetch_history()
 
 
-@st.cache_data(ttl=60 * 30, show_spinner="Running blind backtest on the last 30 days of hourly data…")
+@st.cache_data(ttl=60 * 30, show_spinner="Running blind backtest on the last 365 days…")
 def cached_backtest(df: pd.DataFrame):
     backtest, metrics = blind_backtest(df)
     return backtest, metrics
 
 
-@st.cache_data(ttl=60 * 30, show_spinner="Projecting 30 days forward (hourly)…")
+@st.cache_data(ttl=60 * 30, show_spinner="Projecting 180 days forward…")
 def cached_forecast(df: pd.DataFrame) -> pd.DataFrame:
     return forward_forecast(df)
 
@@ -314,19 +314,10 @@ def base_layout(height: int = 460) -> dict:
 
 # ─── Charts ───────────────────────────────────────────────────
 def history_chart(df: pd.DataFrame) -> go.Figure:
-    """Full history chart — daily mean of the hourly series so we plot ~730
-    points instead of 17k. Log scale, gold area, no overlays.
-    """
-    daily = (
-        df.set_index("ds")["y"]
-          .resample("1D")
-          .mean()
-          .dropna()
-          .reset_index()
-    )
+    """Full history chart — daily closes since 2014, log scale."""
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=daily["ds"], y=daily["y"],
+        x=df["ds"], y=df["y"],
         mode="lines",
         line=dict(color=GOLD, width=1.8, shape="spline", smoothing=0.4),
         fill="tozeroy",
@@ -341,7 +332,7 @@ def history_chart(df: pd.DataFrame) -> go.Figure:
 
 def main_chart(df: pd.DataFrame, forward: pd.DataFrame) -> go.Figure:
     last = df.iloc[-1]
-    cutoff = pd.Timestamp(last["ds"]) - pd.Timedelta(days=90)
+    cutoff = pd.Timestamp(last["ds"]) - pd.Timedelta(days=3 * 365)
     visible = df[df["ds"] >= cutoff]
 
     fig = go.Figure()
@@ -486,7 +477,7 @@ st.markdown(
 <div>
   <span class="hero-eyebrow">Time-series forecast · Facebook Prophet</span>
   <h1 class="hero-title">Predicting Bitcoin's next <em>direction</em>.</h1>
-  <p class="hero-sub">A blind out-of-sample backtest on the last 30 days of <span class="mono">BTC-USD</span> hourly closes, with a forward 30-day projection generated from the full history (yfinance caps hourly data at ~730 days).</p>
+  <p class="hero-sub">A blind out-of-sample backtest on the last 365 days of <span class="mono">BTC-USD</span> daily closes (since 2014), with a forward 180-day projection generated from the full price history.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -512,7 +503,7 @@ f_arrow = "▲" if f_end_delta >= 0 else "▼"
 f_class = "up" if f_end_delta >= 0 else "down"
 c2.markdown(
     kpi(
-        "30-day forecast",
+        "6-month forecast",
         fmt_usd(f_end_val),
         f'<span class="{f_class}">{f_arrow} {abs(f_end_delta):.2f}%</span> &nbsp;·&nbsp; by {pd.Timestamp(f_end["ds"]).strftime("%b %Y")}',
     ),
@@ -520,11 +511,11 @@ c2.markdown(
 )
 
 c3.markdown(
-    kpi("Backtest MAPE", fmt_pct(metrics["mape"]), f"on {metrics['n_test_points']:,} held-out hours"),
+    kpi("Backtest MAPE", fmt_pct(metrics["mape"]), f"on {metrics['n_test_points']} held-out days"),
     unsafe_allow_html=True,
 )
 c4.markdown(
-    kpi("Direction accuracy", fmt_pct(metrics["directional_accuracy"]), "hour-over-hour hit-rate"),
+    kpi("Direction accuracy", fmt_pct(metrics["directional_accuracy"]), "day-over-day hit-rate"),
     unsafe_allow_html=True,
 )
 
@@ -535,8 +526,8 @@ st.markdown(
     """
 <div>
   <span class="eyebrow-sm">00 — Full history</span>
-  <h2 class="section-h">BTC over the last two years</h2>
-  <p class="section-sub">Daily averages of the hourly series — yfinance caps hourly data at <span class="mono">730d</span>, so this is as far back as we can go at this resolution.</p>
+  <h2 class="section-h">BTC since September 2014</h2>
+  <p class="section-sub">Every daily close from launch to today, plotted on a logarithmic scale so the early sub-$1k era stays legible next to today's <span class="mono">$70k+</span> world.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -552,8 +543,8 @@ st.markdown(
     f"""
 <div>
   <span class="eyebrow-sm">01 — Recent &amp; forward</span>
-  <h2 class="section-h">Last 3 months &amp; 30-day projection</h2>
-  <p class="section-sub">Recent BTC-USD action zoomed in, extended by Prophet's 30-day hourly forecast and 80% uncertainty band.</p>
+  <h2 class="section-h">Last 3 years &amp; 6-month projection</h2>
+  <p class="section-sub">Recent BTC-USD action zoomed in, extended by Prophet's 6-month forecast and 80% uncertainty band.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -569,7 +560,7 @@ st.markdown(
     f"""
 <div>
   <span class="eyebrow-sm">02 — Blind backtest</span>
-  <h2 class="section-h">Last 30 days · prediction vs reality</h2>
+  <h2 class="section-h">Last 12 months · prediction vs reality</h2>
   <p class="section-sub">Prophet was trained <em>only</em> on data before this window, then asked to predict it cold. No look-ahead, no re-training, no leakage.</p>
 </div>
 """,
@@ -583,7 +574,7 @@ m1, m2, m3, m4 = st.columns(4, gap="small")
 m1.markdown(kpi("MAE", fmt_usd(metrics["mae"]), "mean absolute error"), unsafe_allow_html=True)
 m2.markdown(kpi("RMSE", fmt_usd(metrics["rmse"]), "root-mean-squared error"), unsafe_allow_html=True)
 m3.markdown(kpi("MAPE", fmt_pct(metrics["mape"]), "mean absolute % error"), unsafe_allow_html=True)
-m4.markdown(kpi("Direction", fmt_pct(metrics["directional_accuracy"]), "hour-over-hour hit-rate"), unsafe_allow_html=True)
+m4.markdown(kpi("Direction", fmt_pct(metrics["directional_accuracy"]), "day-over-day hit-rate"), unsafe_allow_html=True)
 
 # ─── Methodology ──────────────────────────────────────────────
 st.write("")
@@ -604,11 +595,11 @@ with right:
     st.markdown(
         f"""
 <div>
-  <div class="step"><span class="step-num">01</span><div><strong>Fetch</strong><span class="body">BTC-USD hourly closes from Yahoo Finance ({len(df):,} hours over the last 730 days — the yfinance hourly cap).</span></div></div>
-  <div class="step"><span class="step-num">02</span><div><strong>Hold out</strong><span class="body">Last 720 hours (30 days) are removed from the training set and never seen by the model.</span></div></div>
-  <div class="step"><span class="step-num">03</span><div><strong>Fit</strong><span class="body">Prophet on log-prices with daily and weekly seasonality and a flexible changepoint prior.</span></div></div>
+  <div class="step"><span class="step-num">01</span><div><strong>Fetch</strong><span class="body">All-time BTC-USD daily closes from Yahoo Finance ({len(df):,} observations since {fmt_date(data_start)}).</span></div></div>
+  <div class="step"><span class="step-num">02</span><div><strong>Hold out</strong><span class="body">Last 365 days are removed from the training set and never seen by the model.</span></div></div>
+  <div class="step"><span class="step-num">03</span><div><strong>Fit</strong><span class="body">Prophet trained on log-prices with yearly seasonality and a flexible changepoint prior.</span></div></div>
   <div class="step"><span class="step-num">04</span><div><strong>Score</strong><span class="body">Predictions over the held-out window scored on MAE, RMSE, MAPE, and directional hit-rate.</span></div></div>
-  <div class="step"><span class="step-num">05</span><div><strong>Project</strong><span class="body">Re-fit on the full series, project 30 days (720 hours) forward with an 80% uncertainty band.</span></div></div>
+  <div class="step"><span class="step-num">05</span><div><strong>Project</strong><span class="body">Re-fit on the full series, project 180 days forward with an 80% uncertainty band.</span></div></div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -622,7 +613,7 @@ with left:
     st.markdown(
         f"""
 <div class="footer">
-  <div>{fmt_date(data_start)} → {fmt_date(data_end)} · {len(df):,} hourly observations</div>
+  <div>{fmt_date(data_start)} → {fmt_date(data_end)} · {len(df):,} daily observations</div>
   <div>Source: Yahoo Finance · Model: Prophet · Generated {fmt_date(generated)}</div>
 </div>
 """,
