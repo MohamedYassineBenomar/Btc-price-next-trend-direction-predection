@@ -1,25 +1,31 @@
 """BTC price-direction forecast pipeline.
 
 Steps:
-  1. Fetch all-time BTC-USD daily closes from Yahoo Finance (since 2014-09-17).
-  2. Hold out the last 365 days as a blind test set.
+  1. Fetch all-time BTCUSDT hourly closes from Binance (since 2017-08-17).
+     Binance is the only public free source that has hourly BTC data going
+     back nine years; yfinance caps hourly history at 730 days.
+  2. Hold out the last 30 days (720 hourly bars) as a blind test set.
   3. Train Prophet on data strictly before the test window.
   4. Predict the test window, score MAE / RMSE / MAPE / directional accuracy.
-  5. Re-train on the full history and project 180 days forward.
+  5. Re-train on the full history and project 30 days forward.
   6. Export everything the dashboard needs as dashboard/data.json.
+
+Streamlit Cloud reads the committed dashboard/data.json directly; Prophet
+itself doesn't run there (training on 78k hourly points takes minutes).
+Refresh the data by running this script locally and pushing.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
+import requests
 from prophet import Prophet
 
 # Silence the chatty libraries
@@ -35,70 +41,106 @@ DASH_DIR = ROOT / "dashboard"
 DATA_DIR.mkdir(exist_ok=True)
 DASH_DIR.mkdir(exist_ok=True)
 
-TICKER = "BTC-USD"
-HOLDOUT_DAYS = 365     # 1-year blind test
-FUTURE_DAYS = 180      # 6-month forward forecast
+TICKER = "BTCUSDT"
+BINANCE_KLINES = "https://api.binance.com/api/v3/klines"
+BINANCE_START = pd.Timestamp("2017-08-17", tz="UTC")  # BTCUSDT pair launch
+
+HOLDOUT_HOURS = 24 * 30      # 30-day blind test = 720 hours
+FUTURE_HOURS = 24 * 30       # 30-day forward forecast = 720 hours
+
+CACHE_CSV = None  # set lazily after DATA_DIR is created
 
 
-def _from_cache() -> pd.DataFrame | None:
-    """Load the previously-fetched CSV if it exists. Used as a fallback when
-    Streamlit Cloud's network can't reach Yahoo Finance."""
-    cache = DATA_DIR / "btc_history.csv"
-    if not cache.exists():
-        return None
-    df = pd.read_csv(cache)
-    df["ds"] = pd.to_datetime(df["ds"])
-    return df
+def _cache_path() -> Path:
+    return DATA_DIR / "btc_history.csv"
+
+
+def _binance_chunk(start_ms: int, end_ms: int) -> list:
+    """One paginated Binance klines call. Returns a list of klines (max 1000)."""
+    params = {
+        "symbol": TICKER,
+        "interval": "1h",
+        "startTime": start_ms,
+        "endTime": end_ms,
+        "limit": 1000,
+    }
+    r = requests.get(BINANCE_KLINES, params=params, timeout=30)
+    r.raise_for_status()
+    return r.json()
 
 
 def fetch_history() -> pd.DataFrame:
-    print(f"[1/5] Fetching {TICKER} all-time daily history…")
-    try:
-        raw = yf.download(
-            TICKER,
-            start="2014-09-17",
-            end=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            interval="1d",
-            progress=False,
-            auto_adjust=False,
-        )
-    except Exception as e:
-        print(f"      ! yfinance error: {e}")
-        raw = pd.DataFrame()
+    """Fetch all-time hourly BTCUSDT closes from Binance, with on-disk cache.
 
-    if raw.empty:
-        cached = _from_cache()
-        if cached is None or cached.empty:
-            raise RuntimeError(
-                "yfinance returned no data and no cached btc_history.csv is available."
-            )
-        print(f"      → falling back to cache ({len(cached):,} rows)")
-        return cached
+    On first run, paginates from 2017-08-17 to now (~80 calls, ~78k rows).
+    Subsequent runs only fetch bars newer than what's already in the CSV.
+    """
+    cache = _cache_path()
+    existing: pd.DataFrame | None = None
+    if cache.exists():
+        existing = pd.read_csv(cache)
+        existing["ds"] = pd.to_datetime(existing["ds"], utc=True).dt.tz_localize(None)
+        last = existing["ds"].max()
+        start_ts = pd.Timestamp(last, tz="UTC") + pd.Timedelta(hours=1)
+    else:
+        start_ts = BINANCE_START
 
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(0)
+    end_ts = pd.Timestamp.now(tz="UTC")
+    if end_ts <= start_ts:
+        if existing is not None:
+            print(f"[1/5] Cache is current ({len(existing):,} rows from {existing['ds'].min()} to {existing['ds'].max()})")
+            return existing
+        raise RuntimeError("No cache and start time is in the future — clock issue?")
 
-    df = raw.reset_index()[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
-    df["ds"] = pd.to_datetime(df["ds"]).dt.tz_localize(None)
-    df = df.dropna().sort_values("ds").reset_index(drop=True)
+    print(f"[1/5] Fetching BTCUSDT hourly from Binance (since {start_ts.date()})…")
+    rows: list[tuple] = []
+    cursor_ms = int(start_ts.timestamp() * 1000)
+    end_ms = int(end_ts.timestamp() * 1000)
 
-    df.to_csv(DATA_DIR / "btc_history.csv", index=False)
-    print(f"      → {len(df):,} daily rows from {df['ds'].min().date()} to {df['ds'].max().date()}")
+    while cursor_ms < end_ms:
+        try:
+            chunk = _binance_chunk(cursor_ms, end_ms)
+        except requests.RequestException as e:
+            print(f"      ! Binance error: {e} — sleeping 5s and retrying")
+            time.sleep(5)
+            continue
+        if not chunk:
+            break
+        for k in chunk:
+            # k = [open_time, open, high, low, close, volume, close_time, ...]
+            rows.append((pd.Timestamp(k[0], unit="ms"), float(k[4])))
+        # advance past the last close_time
+        cursor_ms = chunk[-1][6] + 1
+        time.sleep(0.05)  # polite rate-limit
+
+    new = pd.DataFrame(rows, columns=["ds", "y"])
+    if existing is not None and not new.empty:
+        df = pd.concat([existing, new], ignore_index=True).drop_duplicates("ds", keep="last")
+    elif existing is not None:
+        df = existing
+    else:
+        df = new
+    df = df.sort_values("ds").reset_index(drop=True)
+
+    if df.empty:
+        raise RuntimeError("Binance returned no data and there is no cache to fall back to.")
+
+    df.to_csv(cache, index=False)
+    print(f"      → {len(df):,} hourly rows from {df['ds'].min()} to {df['ds'].max()}  ({len(new):,} new this run)")
     return df
 
 
 def make_model() -> Prophet:
-    # BTC spans 4+ orders of magnitude over 11 years, so we model in log-space
-    # and exponentiate the predictions back. Yearly seasonality enabled —
-    # 11 years gives the Fourier basis plenty to fit. Weekly off (BTC trades
-    # 24/7, no real weekend effect on daily-bar data).
+    # Hourly BTCUSDT over ~9 years — log-space keeps proportional moves
+    # consistent. All three seasonalities are meaningful at this resolution
+    # (24h intraday cycle, weekly weekend effect, yearly Bitcoin macro cycle).
     return Prophet(
-        daily_seasonality=False,
-        weekly_seasonality=False,
+        daily_seasonality=True,
+        weekly_seasonality=True,
         yearly_seasonality=True,
-        changepoint_prior_scale=0.15,
+        changepoint_prior_scale=0.1,
         changepoint_range=0.95,
-        seasonality_prior_scale=5.0,
+        seasonality_prior_scale=8.0,
         interval_width=0.80,
     )
 
@@ -123,20 +165,19 @@ def predict_exp(model: Prophet, future: pd.DataFrame) -> pd.DataFrame:
 
 
 def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    if len(df) <= HOLDOUT_DAYS:
+    if len(df) <= HOLDOUT_HOURS:
         raise RuntimeError(
-            f"Only {len(df)} rows but need > {HOLDOUT_DAYS} for the holdout split."
+            f"Only {len(df)} rows but need > {HOLDOUT_HOURS} for the holdout split."
         )
 
-    cutoff = df["ds"].max() - pd.Timedelta(days=HOLDOUT_DAYS)
-    train = df[df["ds"] <= cutoff].copy()
-    test = df[df["ds"] > cutoff].copy()
+    train = df.iloc[:-HOLDOUT_HOURS].copy()
+    test = df.iloc[-HOLDOUT_HOURS:].copy()
 
-    print(f"[2/5] Backtest split: train {len(train):,} days  ·  test {len(test):,} days (>{cutoff.date()})")
-    print(f"[3/5] Training Prophet (log-space) on training set…")
+    print(f"[2/5] Backtest split: train {len(train):,} hours  ·  test {len(test):,} hours (>{train['ds'].iloc[-1]})")
+    print(f"[3/5] Training Prophet (log-space) on training set… this can take a few minutes for hourly data.")
     model = fit_log(train)
 
-    future = model.make_future_dataframe(periods=HOLDOUT_DAYS + 30, freq="D")
+    future = model.make_future_dataframe(periods=HOLDOUT_HOURS + 24, freq="h")
     forecast = predict_exp(model, future)
 
     merged = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].merge(test, on="ds", how="inner")
@@ -145,7 +186,6 @@ def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     rmse = float(np.sqrt((err ** 2).mean()))
     mape = float((err.abs() / merged["y"]).mean() * 100)
 
-    # Directional accuracy: did the model get the day-over-day up/down right?
     actual_dir = (merged["y"].diff() > 0).astype(int)
     pred_dir = (merged["yhat"].diff() > 0).astype(int)
     direction_match = (actual_dir == pred_dir).iloc[1:]
@@ -156,8 +196,8 @@ def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         "rmse": rmse,
         "mape": mape,
         "directional_accuracy": dir_acc,
-        "test_start": str(merged["ds"].min().date()),
-        "test_end": str(merged["ds"].max().date()),
+        "test_start": str(merged["ds"].min()),
+        "test_end": str(merged["ds"].max()),
         "n_test_points": int(len(merged)),
         "train_size": int(len(train)),
     }
@@ -168,19 +208,20 @@ def blind_backtest(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
 
 def forward_forecast(df: pd.DataFrame) -> pd.DataFrame:
-    print(f"[4/5] Re-training on full history (log-space), projecting {FUTURE_DAYS} days forward…")
+    print(f"[4/5] Re-training on full history (log-space), projecting {FUTURE_HOURS} hours (~{FUTURE_HOURS // 24} days) forward…")
     model = fit_log(df)
-    future = model.make_future_dataframe(periods=FUTURE_DAYS, freq="D")
+    future = model.make_future_dataframe(periods=FUTURE_HOURS, freq="h")
     forecast = predict_exp(model, future)
     last = df["ds"].max()
     forward = forecast[forecast["ds"] > last][["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
     return forward
 
 
-def to_record(df: pd.DataFrame, cols: list[str]) -> list[dict]:
+def to_record(df: pd.DataFrame, cols: list[str], hourly: bool = False) -> list[dict]:
     out = df[cols].copy()
     if "ds" in out.columns:
-        out["ds"] = pd.to_datetime(out["ds"]).dt.strftime("%Y-%m-%d")
+        fmt = "%Y-%m-%dT%H:00" if hourly else "%Y-%m-%d"
+        out["ds"] = pd.to_datetime(out["ds"]).dt.strftime(fmt)
     for c in cols:
         if c == "ds":
             continue
@@ -188,12 +229,23 @@ def to_record(df: pd.DataFrame, cols: list[str]) -> list[dict]:
     return out.to_dict(orient="records")
 
 
+def daily_means(df: pd.DataFrame) -> pd.DataFrame:
+    """Daily mean of the hourly series — used for the all-time long-view
+    chart so the dashboard ships ~3.3k points instead of ~78k."""
+    daily = (
+        df.set_index("ds")["y"]
+          .resample("1D")
+          .mean()
+          .dropna()
+          .reset_index()
+    )
+    return daily
+
+
 def prior_year_overlay(df: pd.DataFrame, backtest: pd.DataFrame) -> pd.DataFrame:
-    """Return the BTC hourly closes for the same calendar window one year
-    before the blind-test window, with `ds` shifted forward by 365 days so
-    the points line up on the test window's x-axis. Returns empty if the
-    history doesn't reach back a full year before the test start.
-    """
+    """Same calendar window 1 year before the blind-test window, shifted
+    forward by 365d so the line aligns with the test x-axis. Empty if
+    history doesn't reach far enough back."""
     test_start = pd.Timestamp(backtest["ds"].min())
     test_end = pd.Timestamp(backtest["ds"].max())
     shift = pd.Timedelta(days=365)
@@ -214,28 +266,32 @@ def main() -> None:
     prior = prior_year_overlay(df, backtest)
 
     print("[5/5] Writing dashboard/data.json…")
+    history_daily = daily_means(df)
     payload = {
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "ticker": TICKER,
-            "frequency": "daily",
-            "data_start": str(df["ds"].min().date()),
-            "data_end": str(df["ds"].max().date()),
+            "source": "Binance",
+            "frequency": "hourly",
+            "data_start": str(df["ds"].min()),
+            "data_end": str(df["ds"].max()),
             "n_observations": int(len(df)),
             "current_price": float(df["y"].iloc[-1]),
             "previous_close": float(df["y"].iloc[-2]),
             "all_time_high": float(df["y"].max()),
-            "all_time_high_date": str(df.loc[df["y"].idxmax(), "ds"].date()),
-            "holdout_days": HOLDOUT_DAYS,
-            "future_days": FUTURE_DAYS,
+            "all_time_high_date": str(df.loc[df["y"].idxmax(), "ds"]),
+            "holdout_hours": HOLDOUT_HOURS,
+            "future_hours": FUTURE_HOURS,
         },
-        "history": to_record(df, ["ds", "y"]),
+        # Daily means for the all-time chart (~3.3k points, compact). The
+        # backtest and forecast keys keep full hourly resolution.
+        "history": to_record(history_daily, ["ds", "y"]),
         "backtest": {
-            "predictions": to_record(backtest, ["ds", "y", "yhat", "yhat_lower", "yhat_upper"]),
-            "prior_year": to_record(prior, ["ds", "y_prior"]),
+            "predictions": to_record(backtest, ["ds", "y", "yhat", "yhat_lower", "yhat_upper"], hourly=True),
+            "prior_year": to_record(prior, ["ds", "y_prior"], hourly=True),
             "metrics": metrics,
         },
-        "forecast": to_record(forward, ["ds", "yhat", "yhat_lower", "yhat_upper"]),
+        "forecast": to_record(forward, ["ds", "yhat", "yhat_lower", "yhat_upper"], hourly=True),
     }
 
     out_path = DASH_DIR / "data.json"

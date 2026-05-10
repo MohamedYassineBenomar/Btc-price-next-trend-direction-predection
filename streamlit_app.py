@@ -1,26 +1,21 @@
 """Streamlit-hosted BTC · Prophet dashboard.
 
-Run locally:
-    .venv/bin/streamlit run streamlit_app.py
-
-Deploy:
-    Push to GitHub → connect at share.streamlit.io → entry-point streamlit_app.py
+Reads pre-computed dashboard/data.json — no Prophet runs on Streamlit Cloud
+(training on 78k hourly points takes minutes and would time out the
+worker). Refresh the data by running `python pipeline.py` locally and
+pushing; Cloud auto-redeploys on push.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from pipeline import (
-    blind_backtest,
-    fetch_history,
-    forward_forecast,
-    prior_year_overlay,
-)
+DATA_PATH = Path(__file__).parent / "dashboard" / "data.json"
 
 # ─── Theme ────────────────────────────────────────────────────
 BG          = "#06070A"
@@ -234,21 +229,23 @@ h2.section-h {{ font-size: 26px; font-weight: 600; letter-spacing: -0.022em; col
     unsafe_allow_html=True,
 )
 
-# ─── Cached pipeline ──────────────────────────────────────────
-@st.cache_data(ttl=60 * 30, show_spinner="Fetching BTC history…")
-def cached_history() -> pd.DataFrame:
-    return fetch_history()
+# ─── Data loader (JSON-only, no Prophet on Cloud) ─────────────
+@st.cache_data(show_spinner="Loading dashboard data…")
+def load_payload() -> dict:
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(
+            f"{DATA_PATH} not found. Run `python pipeline.py` locally to "
+            f"generate it, then commit + push."
+        )
+    with DATA_PATH.open() as f:
+        return json.load(f)
 
 
-@st.cache_data(ttl=60 * 30, show_spinner="Running blind backtest on the last 365 days…")
-def cached_backtest(df: pd.DataFrame):
-    backtest, metrics = blind_backtest(df)
-    return backtest, metrics
-
-
-@st.cache_data(ttl=60 * 30, show_spinner="Projecting 180 days forward…")
-def cached_forecast(df: pd.DataFrame) -> pd.DataFrame:
-    return forward_forecast(df)
+def _to_df(records: list[dict]) -> pd.DataFrame:
+    df = pd.DataFrame(records)
+    if "ds" in df.columns:
+        df["ds"] = pd.to_datetime(df["ds"])
+    return df
 
 
 # ─── Helpers ──────────────────────────────────────────────────
@@ -314,7 +311,7 @@ def base_layout(height: int = 460) -> dict:
 
 # ─── Charts ───────────────────────────────────────────────────
 def history_chart(df: pd.DataFrame) -> go.Figure:
-    """Full history chart — daily closes since 2014, log scale."""
+    """All-time chart — daily mean of the hourly series since Aug 2017."""
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=df["ds"], y=df["y"],
@@ -332,7 +329,7 @@ def history_chart(df: pd.DataFrame) -> go.Figure:
 
 def main_chart(df: pd.DataFrame, forward: pd.DataFrame) -> go.Figure:
     last = df.iloc[-1]
-    cutoff = pd.Timestamp(last["ds"]) - pd.Timedelta(days=3 * 365)
+    cutoff = pd.Timestamp(last["ds"]) - pd.Timedelta(days=90)
     visible = df[df["ds"] >= cutoff]
 
     fig = go.Figure()
@@ -441,30 +438,33 @@ def kpi(label: str, value: str, meta_html: str = "") -> str:
 
 # ─── Render ───────────────────────────────────────────────────
 try:
-    df = cached_history()
-    backtest, metrics = cached_backtest(df)
-    forward = cached_forecast(df)
-    prior = prior_year_overlay(df, backtest)
+    payload = load_payload()
 except Exception as e:
     st.error(
-        f"Pipeline failed to start. This is usually a transient yfinance "
-        f"network issue on Streamlit Cloud — try the **↻ Refresh data** "
-        f"button (top-right) or wait a minute and reload. \n\n"
+        f"Failed to load `dashboard/data.json`.\n\n"
+        f"Run `python pipeline.py` locally and push to refresh the data.\n\n"
         f"Underlying error: `{type(e).__name__}: {e}`"
     )
     st.stop()
 
-last_close = float(df["y"].iloc[-1])
-prev_close = float(df["y"].iloc[-2])
+meta = payload["meta"]
+df = _to_df(payload["history"])                        # daily-resampled for the long view
+backtest = _to_df(payload["backtest"]["predictions"])  # hourly, last 30 days
+forward = _to_df(payload["forecast"])                  # hourly, next 30 days
+prior = _to_df(payload["backtest"]["prior_year"])
+metrics = payload["backtest"]["metrics"]
+
+last_close = float(meta["current_price"])
+prev_close = float(meta["previous_close"])
 day_delta = ((last_close - prev_close) / prev_close) * 100
 
 f_end = forward.iloc[-1]
 f_end_val = float(f_end["yhat"])
 f_end_delta = ((f_end_val - last_close) / last_close) * 100
 
-data_end = pd.Timestamp(df["ds"].iloc[-1])
-data_start = pd.Timestamp(df["ds"].iloc[0])
-generated = datetime.now(timezone.utc)
+data_end = pd.Timestamp(meta["data_end"])
+data_start = pd.Timestamp(meta["data_start"])
+generated = pd.Timestamp(meta["generated_at"])
 
 # ─── Nav row ──────────────────────────────────────────────────
 st.markdown(
@@ -486,7 +486,7 @@ st.markdown(
 <div>
   <span class="hero-eyebrow">Time-series forecast · Facebook Prophet</span>
   <h1 class="hero-title">Predicting Bitcoin's next <em>direction</em>.</h1>
-  <p class="hero-sub">A blind out-of-sample backtest on the last 365 days of <span class="mono">BTC-USD</span> daily closes (since 2014), with a forward 180-day projection generated from the full price history.</p>
+  <p class="hero-sub">A blind out-of-sample backtest on the last 30 days of <span class="mono">BTCUSDT</span> hourly closes from Binance (history since 2017-08), with a forward 30-day hourly projection generated from the full series.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -512,7 +512,7 @@ f_arrow = "▲" if f_end_delta >= 0 else "▼"
 f_class = "up" if f_end_delta >= 0 else "down"
 c2.markdown(
     kpi(
-        "6-month forecast",
+        "30-day forecast",
         fmt_usd(f_end_val),
         f'<span class="{f_class}">{f_arrow} {abs(f_end_delta):.2f}%</span> &nbsp;·&nbsp; by {pd.Timestamp(f_end["ds"]).strftime("%b %Y")}',
     ),
@@ -520,11 +520,11 @@ c2.markdown(
 )
 
 c3.markdown(
-    kpi("Backtest MAPE", fmt_pct(metrics["mape"]), f"on {metrics['n_test_points']} held-out days"),
+    kpi("Backtest MAPE", fmt_pct(metrics["mape"]), f"on {metrics['n_test_points']:,} held-out hours"),
     unsafe_allow_html=True,
 )
 c4.markdown(
-    kpi("Direction accuracy", fmt_pct(metrics["directional_accuracy"]), "day-over-day hit-rate"),
+    kpi("Direction accuracy", fmt_pct(metrics["directional_accuracy"]), "hour-over-hour hit-rate"),
     unsafe_allow_html=True,
 )
 
@@ -535,8 +535,8 @@ st.markdown(
     """
 <div>
   <span class="eyebrow-sm">00 — Full history</span>
-  <h2 class="section-h">BTC since September 2014</h2>
-  <p class="section-sub">Every daily close from launch to today, plotted on a logarithmic scale so the early sub-$1k era stays legible next to today's <span class="mono">$70k+</span> world.</p>
+  <h2 class="section-h">BTC since August 2017</h2>
+  <p class="section-sub">Daily mean of the hourly Binance series since the BTCUSDT pair launched on 2017-08-17. Log scale so $4k Bitcoin and $100k Bitcoin can share the same canvas.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -552,8 +552,8 @@ st.markdown(
     f"""
 <div>
   <span class="eyebrow-sm">01 — Recent &amp; forward</span>
-  <h2 class="section-h">Last 3 years &amp; 6-month projection</h2>
-  <p class="section-sub">Recent BTC-USD action zoomed in, extended by Prophet's 6-month forecast and 80% uncertainty band.</p>
+  <h2 class="section-h">Last 3 months &amp; 30-day projection</h2>
+  <p class="section-sub">Recent hourly action zoomed in, extended by Prophet's 30-day hourly forecast and 80% uncertainty band.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -569,7 +569,7 @@ st.markdown(
     f"""
 <div>
   <span class="eyebrow-sm">02 — Blind backtest</span>
-  <h2 class="section-h">Last 12 months · prediction vs reality</h2>
+  <h2 class="section-h">Last 30 days · prediction vs reality</h2>
   <p class="section-sub">Prophet was trained <em>only</em> on data before this window, then asked to predict it cold. No look-ahead, no re-training, no leakage.</p>
 </div>
 """,
@@ -583,7 +583,7 @@ m1, m2, m3, m4 = st.columns(4, gap="small")
 m1.markdown(kpi("MAE", fmt_usd(metrics["mae"]), "mean absolute error"), unsafe_allow_html=True)
 m2.markdown(kpi("RMSE", fmt_usd(metrics["rmse"]), "root-mean-squared error"), unsafe_allow_html=True)
 m3.markdown(kpi("MAPE", fmt_pct(metrics["mape"]), "mean absolute % error"), unsafe_allow_html=True)
-m4.markdown(kpi("Direction", fmt_pct(metrics["directional_accuracy"]), "day-over-day hit-rate"), unsafe_allow_html=True)
+m4.markdown(kpi("Direction", fmt_pct(metrics["directional_accuracy"]), "hour-over-hour hit-rate"), unsafe_allow_html=True)
 
 # ─── Methodology ──────────────────────────────────────────────
 st.write("")
@@ -604,31 +604,25 @@ with right:
     st.markdown(
         f"""
 <div>
-  <div class="step"><span class="step-num">01</span><div><strong>Fetch</strong><span class="body">All-time BTC-USD daily closes from Yahoo Finance ({len(df):,} observations since {fmt_date(data_start)}).</span></div></div>
-  <div class="step"><span class="step-num">02</span><div><strong>Hold out</strong><span class="body">Last 365 days are removed from the training set and never seen by the model.</span></div></div>
-  <div class="step"><span class="step-num">03</span><div><strong>Fit</strong><span class="body">Prophet trained on log-prices with yearly seasonality and a flexible changepoint prior.</span></div></div>
+  <div class="step"><span class="step-num">01</span><div><strong>Fetch</strong><span class="body">All-time BTCUSDT hourly closes from Binance ({meta["n_observations"]:,} hourly bars since {fmt_date(data_start)}).</span></div></div>
+  <div class="step"><span class="step-num">02</span><div><strong>Hold out</strong><span class="body">Last 720 hours (30 days) are removed from the training set and never seen by the model.</span></div></div>
+  <div class="step"><span class="step-num">03</span><div><strong>Fit</strong><span class="body">Prophet on log-prices with daily, weekly and yearly seasonality and a flexible changepoint prior.</span></div></div>
   <div class="step"><span class="step-num">04</span><div><strong>Score</strong><span class="body">Predictions over the held-out window scored on MAE, RMSE, MAPE, and directional hit-rate.</span></div></div>
-  <div class="step"><span class="step-num">05</span><div><strong>Project</strong><span class="body">Re-fit on the full series, project 180 days forward with an 80% uncertainty band.</span></div></div>
+  <div class="step"><span class="step-num">05</span><div><strong>Project</strong><span class="body">Re-fit on the full series, project 30 days (720 hours) forward with an 80% uncertainty band.</span></div></div>
 </div>
 """,
         unsafe_allow_html=True,
     )
 
-# ─── Refresh + footer ─────────────────────────────────────────
+# ─── Footer ───────────────────────────────────────────────────
 st.write("")
 st.write("")
-left, right = st.columns([3, 1])
-with left:
-    st.markdown(
-        f"""
+st.markdown(
+    f"""
 <div class="footer">
-  <div>{fmt_date(data_start)} → {fmt_date(data_end)} · {len(df):,} daily observations</div>
-  <div>Source: Yahoo Finance · Model: Prophet · Generated {fmt_date(generated)}</div>
+  <div>{fmt_date(data_start)} → {fmt_date(data_end)} · {meta["n_observations"]:,} hourly observations</div>
+  <div>Source: Binance · Model: Prophet · Generated {fmt_date(generated)}</div>
 </div>
 """,
-        unsafe_allow_html=True,
-    )
-with right:
-    if st.button("↻ Refresh data", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+    unsafe_allow_html=True,
+)

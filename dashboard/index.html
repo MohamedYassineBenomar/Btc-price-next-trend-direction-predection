@@ -41,7 +41,7 @@
     <header class="hero">
       <span class="eyebrow">Time-series forecast · Facebook Prophet</span>
       <h1 class="reveal">Predicting Bitcoin's next <em>direction</em>.</h1>
-      <p class="hero-sub reveal">A blind out-of-sample backtest on the last 365 days of <span class="mono">BTC-USD</span> daily closes (since 2014), with a forward 180-day projection generated from the full price history.</p>
+      <p class="hero-sub reveal">A blind out-of-sample backtest on the last 30 days of <span class="mono">BTCUSDT</span> hourly closes from Binance (history since 2017-08), with a forward 30-day hourly projection generated from the full series.</p>
 
       <div class="kpis">
         <div class="kpi reveal">
@@ -50,19 +50,19 @@
           <div class="kpi-meta" id="kpi-price-meta">—</div>
         </div>
         <div class="kpi reveal">
-          <div class="kpi-label">6-month forecast</div>
+          <div class="kpi-label">30-day forecast</div>
           <div class="kpi-value" id="kpi-forecast">—</div>
           <div class="kpi-meta" id="kpi-forecast-meta">—</div>
         </div>
         <div class="kpi reveal">
           <div class="kpi-label">Backtest MAPE</div>
           <div class="kpi-value" id="kpi-mape">—</div>
-          <div class="kpi-meta">on 365 held-out days</div>
+          <div class="kpi-meta">on 720 held-out hours</div>
         </div>
         <div class="kpi reveal">
           <div class="kpi-label">Direction accuracy</div>
           <div class="kpi-value" id="kpi-dir">—</div>
-          <div class="kpi-meta">day-over-day hit-rate</div>
+          <div class="kpi-meta">hour-over-hour hit-rate</div>
         </div>
       </div>
     </header>
@@ -71,8 +71,8 @@
       <div class="section-head">
         <div>
           <span class="eyebrow eyebrow-sm">00 — Full history</span>
-          <h2>BTC since September 2014</h2>
-          <p class="section-sub">Every daily close from launch to today, plotted on a logarithmic scale so the early sub-$1k era stays legible next to today's <span class="mono">$70k+</span> world.</p>
+          <h2>BTC since August 2017</h2>
+          <p class="section-sub">Daily mean of the hourly Binance series since the BTCUSDT pair launched on 2017-08-17. Log scale so $4k Bitcoin and $100k Bitcoin can share the same canvas.</p>
         </div>
       </div>
       <div class="chart-card">
@@ -84,12 +84,12 @@
       <div class="section-head">
         <div>
           <span class="eyebrow eyebrow-sm">01 — Recent &amp; forward</span>
-          <h2>Last 3 years &amp; 6-month projection</h2>
-          <p class="section-sub">Recent BTC-USD action zoomed in, extended by Prophet's 6-month forecast and 80% uncertainty band.</p>
+          <h2>Last 3 months &amp; 30-day projection</h2>
+          <p class="section-sub">Recent hourly action zoomed in, extended by Prophet's 30-day hourly forecast and 80% uncertainty band.</p>
         </div>
         <div class="chart-toggle" id="range-toggle" role="tablist" aria-label="Time range">
-          <button data-range="1y" role="tab" aria-selected="false">1Y</button>
-          <button data-range="3y" class="active" role="tab" aria-selected="true">3Y</button>
+          <button data-range="1m" role="tab" aria-selected="false">1M</button>
+          <button data-range="3m" class="active" role="tab" aria-selected="true">3M</button>
           <button data-range="all" role="tab" aria-selected="false">All</button>
         </div>
       </div>
@@ -107,14 +107,14 @@
       <div class="section-head">
         <div>
           <span class="eyebrow eyebrow-sm">02 — Blind backtest</span>
-          <h2>Last 12 months · prediction vs reality</h2>
+          <h2>Last 30 days · prediction vs reality</h2>
           <p class="section-sub">Prophet was trained <em>only</em> on data before this window, then asked to predict it cold. No look-ahead, no re-training, no leakage.</p>
         </div>
       </div>
       <div class="chart-card">
         <div id="chart-backtest" style="height:440px;"></div>
         <div class="chart-legend" style="border-top:1px solid var(--border);margin-top:10px;padding-top:14px">
-          <span><i class="dot dot-gold"></i> Actual (last 12 months)</span>
+          <span><i class="dot dot-gold"></i> Actual (last 30 days)</span>
           <span><i class="dot dot-blue"></i> Prophet prediction</span>
           <span><i class="dot" style="background:#9CA3AF"></i> Same period · prior year</span>
         </div>
@@ -137,7 +137,7 @@
           <div class="metric">
             <div class="metric-label">Direction</div>
             <div class="metric-value" id="m-dir">—</div>
-            <div class="metric-foot">day-over-day hit-rate</div>
+            <div class="metric-foot">hour-over-hour hit-rate</div>
           </div>
         </div>
       </div>
@@ -150,21 +150,21 @@
           <h3>Honest, reproducible, no leakage.</h3>
         </div>
         <ol class="method-steps">
-          <li><span class="step-num">01</span><div><strong>Fetch</strong><span>All-time BTC-USD daily closes from Yahoo Finance (~4,250 observations since 2014-09-17).</span></div></li>
-          <li><span class="step-num">02</span><div><strong>Hold out</strong><span>Last 365 days are removed from the training set and never seen by the model.</span></div></li>
-          <li><span class="step-num">03</span><div><strong>Fit</strong><span>Prophet on log-prices with yearly seasonality and a flexible changepoint prior.</span></div></li>
+          <li><span class="step-num">01</span><div><strong>Fetch</strong><span>All-time BTCUSDT hourly closes from Binance (~76,000 hourly bars since 2017-08-17).</span></div></li>
+          <li><span class="step-num">02</span><div><strong>Hold out</strong><span>Last 720 hours (30 days) are removed from the training set and never seen by the model.</span></div></li>
+          <li><span class="step-num">03</span><div><strong>Fit</strong><span>Prophet on log-prices with daily, weekly and yearly seasonality and a flexible changepoint prior.</span></div></li>
           <li><span class="step-num">04</span><div><strong>Score</strong><span>Predictions over the held-out window scored on MAE, RMSE, MAPE, and directional hit-rate.</span></div></li>
-          <li><span class="step-num">05</span><div><strong>Project</strong><span>Re-fit on the full series, project 180 days forward with an 80% uncertainty band.</span></div></li>
+          <li><span class="step-num">05</span><div><strong>Project</strong><span>Re-fit on the full series, project 30 days (720 hours) forward with an 80% uncertainty band.</span></div></li>
         </ol>
       </div>
     </section>
 
     <footer>
       <div>
-        <span id="data-range">—</span> · <span id="n-obs">—</span> daily observations
+        <span id="data-range">—</span> · <span id="n-obs">—</span> hourly observations
       </div>
       <div class="foot-right">
-        <span>Source: Yahoo Finance</span>
+        <span>Source: Binance</span>
         <span class="dim">·</span>
         <span>Model: Prophet 1.3</span>
         <span class="dim">·</span>
