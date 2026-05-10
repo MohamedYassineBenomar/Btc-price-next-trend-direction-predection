@@ -41,7 +41,7 @@
     <header class="hero">
       <span class="eyebrow">Time-series forecast · Facebook Prophet</span>
       <h1 class="reveal">Predicting Bitcoin's next <em>direction</em>.</h1>
-      <p class="hero-sub reveal">A blind out-of-sample backtest on the last 30 days of <span class="mono">BTCUSDT</span> hourly closes from Binance (history since 2017-08), with a forward 30-day hourly projection generated from the full series.</p>
+      <p class="hero-sub reveal">A blind out-of-sample backtest on the last 30 days of <span class="mono">BTC/USD</span> hourly closes from Bitstamp (history since 2014-09), with a forward 30-day hourly projection generated from the full series.</p>
 
       <div class="kpis">
         <div class="kpi reveal">
@@ -71,8 +71,8 @@
       <div class="section-head">
         <div>
           <span class="eyebrow eyebrow-sm">00 — Full history</span>
-          <h2>BTC since August 2017</h2>
-          <p class="section-sub">Daily mean of the hourly Binance series since the BTCUSDT pair launched on 2017-08-17. Log scale so $4k Bitcoin and $100k Bitcoin can share the same canvas.</p>
+          <h2>BTC since September 2014</h2>
+          <p class="section-sub">Daily mean of the hourly Bitstamp BTC/USD series since 2014-09-17 — the full eleven-year journey from $400 to $100k+. Log scale so the early years stay legible.</p>
         </div>
       </div>
       <div class="chart-card">
@@ -150,7 +150,7 @@
           <h3>Honest, reproducible, no leakage.</h3>
         </div>
         <ol class="method-steps">
-          <li><span class="step-num">01</span><div><strong>Fetch</strong><span>All-time BTCUSDT hourly closes from Binance (~76,000 hourly bars since 2017-08-17).</span></div></li>
+          <li><span class="step-num">01</span><div><strong>Fetch</strong><span>All-time BTC/USD hourly closes from Bitstamp (~100,000 hourly bars since 2014-09-17).</span></div></li>
           <li><span class="step-num">02</span><div><strong>Hold out</strong><span>Last 720 hours (30 days) are removed from the training set and never seen by the model.</span></div></li>
           <li><span class="step-num">03</span><div><strong>Fit</strong><span>Prophet on log-prices with daily, weekly and yearly seasonality and a flexible changepoint prior.</span></div></li>
           <li><span class="step-num">04</span><div><strong>Score</strong><span>Predictions over the held-out window scored on MAE, RMSE, MAPE, and directional hit-rate.</span></div></li>
@@ -164,7 +164,7 @@
         <span id="data-range">—</span> · <span id="n-obs">—</span> hourly observations
       </div>
       <div class="foot-right">
-        <span>Source: Binance</span>
+        <span>Source: Bitstamp</span>
         <span class="dim">·</span>
         <span>Model: Prophet 1.3</span>
         <span class="dim">·</span>

@@ -1,9 +1,10 @@
 """BTC price-direction forecast pipeline.
 
 Steps:
-  1. Fetch all-time BTCUSDT hourly closes from Binance (since 2017-08-17).
-     Binance is the only public free source that has hourly BTC data going
-     back nine years; yfinance caps hourly history at 730 days.
+  1. Fetch all-time BTC/USD hourly closes from Bitstamp (since 2014-09-17).
+     Bitstamp's free OHLC endpoint goes back to 2011, so we get the full
+     11+ year history at hourly resolution. Binance only has ~9 years
+     (BTCUSDT launched 2017-08), and yfinance caps hourly at 730 days.
   2. Hold out the last 30 days (720 hourly bars) as a blind test set.
   3. Train Prophet on data strictly before the test window.
   4. Predict the test window, score MAE / RMSE / MAPE / directional accuracy.
@@ -11,8 +12,9 @@ Steps:
   6. Export everything the dashboard needs as dashboard/data.json.
 
 Streamlit Cloud reads the committed dashboard/data.json directly; Prophet
-itself doesn't run there (training on 78k hourly points takes minutes).
-Refresh the data by running this script locally and pushing.
+itself doesn't run there. Refresh data by running this script locally and
+pushing — the Bitstamp fetcher is incremental, so subsequent runs only
+pull bars newer than the cached CSV.
 """
 
 from __future__ import annotations
@@ -41,49 +43,44 @@ DASH_DIR = ROOT / "dashboard"
 DATA_DIR.mkdir(exist_ok=True)
 DASH_DIR.mkdir(exist_ok=True)
 
-TICKER = "BTCUSDT"
-BINANCE_KLINES = "https://api.binance.com/api/v3/klines"
-BINANCE_START = pd.Timestamp("2017-08-17", tz="UTC")  # BTCUSDT pair launch
+TICKER = "btcusd"
+BITSTAMP_OHLC = f"https://www.bitstamp.net/api/v2/ohlc/{TICKER}/"
+HISTORY_START = pd.Timestamp("2014-09-17", tz="UTC")  # match the prior daily-data start
 
 HOLDOUT_HOURS = 24 * 30      # 30-day blind test = 720 hours
 FUTURE_HOURS = 24 * 30       # 30-day forward forecast = 720 hours
-
-CACHE_CSV = None  # set lazily after DATA_DIR is created
 
 
 def _cache_path() -> Path:
     return DATA_DIR / "btc_history.csv"
 
 
-def _binance_chunk(start_ms: int, end_ms: int) -> list:
-    """One paginated Binance klines call. Returns a list of klines (max 1000)."""
-    params = {
-        "symbol": TICKER,
-        "interval": "1h",
-        "startTime": start_ms,
-        "endTime": end_ms,
-        "limit": 1000,
-    }
-    r = requests.get(BINANCE_KLINES, params=params, timeout=30)
+def _bitstamp_chunk(start_s: int) -> list[dict]:
+    """One paginated Bitstamp OHLC call. Returns up to 1000 hourly bars
+    starting at start_s (seconds, UTC).
+    """
+    params = {"step": 3600, "limit": 1000, "start": start_s}
+    r = requests.get(BITSTAMP_OHLC, params=params, timeout=30)
     r.raise_for_status()
-    return r.json()
+    payload = r.json()
+    return payload.get("data", {}).get("ohlc", [])
 
 
 def fetch_history() -> pd.DataFrame:
-    """Fetch all-time hourly BTCUSDT closes from Binance, with on-disk cache.
+    """Fetch all-time hourly BTC/USD closes from Bitstamp, with on-disk cache.
 
-    On first run, paginates from 2017-08-17 to now (~80 calls, ~78k rows).
+    On first run, paginates from 2014-09-17 to now (~100 calls, ~100k rows).
     Subsequent runs only fetch bars newer than what's already in the CSV.
     """
     cache = _cache_path()
     existing: pd.DataFrame | None = None
     if cache.exists():
         existing = pd.read_csv(cache)
-        existing["ds"] = pd.to_datetime(existing["ds"], utc=True).dt.tz_localize(None)
+        existing["ds"] = pd.to_datetime(existing["ds"])
         last = existing["ds"].max()
         start_ts = pd.Timestamp(last, tz="UTC") + pd.Timedelta(hours=1)
     else:
-        start_ts = BINANCE_START
+        start_ts = HISTORY_START
 
     end_ts = pd.Timestamp.now(tz="UTC")
     if end_ts <= start_ts:
@@ -92,26 +89,34 @@ def fetch_history() -> pd.DataFrame:
             return existing
         raise RuntimeError("No cache and start time is in the future — clock issue?")
 
-    print(f"[1/5] Fetching BTCUSDT hourly from Binance (since {start_ts.date()})…")
+    print(f"[1/5] Fetching BTC/USD hourly from Bitstamp (since {start_ts.date()})…")
     rows: list[tuple] = []
-    cursor_ms = int(start_ts.timestamp() * 1000)
-    end_ms = int(end_ts.timestamp() * 1000)
+    cursor_s = int(start_ts.timestamp())
+    end_s = int(end_ts.timestamp())
+    last_seen_s = cursor_s
 
-    while cursor_ms < end_ms:
+    while cursor_s < end_s:
         try:
-            chunk = _binance_chunk(cursor_ms, end_ms)
+            chunk = _bitstamp_chunk(cursor_s)
         except requests.RequestException as e:
-            print(f"      ! Binance error: {e} — sleeping 5s and retrying")
+            print(f"      ! Bitstamp error: {e} — sleeping 5s and retrying")
             time.sleep(5)
             continue
         if not chunk:
             break
-        for k in chunk:
-            # k = [open_time, open, high, low, close, volume, close_time, ...]
-            rows.append((pd.Timestamp(k[0], unit="ms"), float(k[4])))
-        # advance past the last close_time
-        cursor_ms = chunk[-1][6] + 1
-        time.sleep(0.05)  # polite rate-limit
+        for bar in chunk:
+            ts = int(bar["timestamp"])
+            if ts > end_s:
+                break
+            rows.append((pd.Timestamp(ts, unit="s"), float(bar["close"])))
+        new_last = int(chunk[-1]["timestamp"])
+        if new_last <= last_seen_s:
+            break  # no progress — bail out so we don't loop forever
+        last_seen_s = new_last
+        cursor_s = new_last + 3600  # next bar after the last close
+        time.sleep(0.05)
+        if len(rows) % 10000 == 0 and rows:
+            print(f"      … fetched {len(rows):,} new bars so far")
 
     new = pd.DataFrame(rows, columns=["ds", "y"])
     if existing is not None and not new.empty:
@@ -123,7 +128,7 @@ def fetch_history() -> pd.DataFrame:
     df = df.sort_values("ds").reset_index(drop=True)
 
     if df.empty:
-        raise RuntimeError("Binance returned no data and there is no cache to fall back to.")
+        raise RuntimeError("Bitstamp returned no data and there is no cache to fall back to.")
 
     df.to_csv(cache, index=False)
     print(f"      → {len(df):,} hourly rows from {df['ds'].min()} to {df['ds'].max()}  ({len(new):,} new this run)")
@@ -271,7 +276,7 @@ def main() -> None:
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "ticker": TICKER,
-            "source": "Binance",
+            "source": "Bitstamp",
             "frequency": "hourly",
             "data_start": str(df["ds"].min()),
             "data_end": str(df["ds"].max()),

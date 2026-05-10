@@ -486,7 +486,7 @@ st.markdown(
 <div>
   <span class="hero-eyebrow">Time-series forecast · Facebook Prophet</span>
   <h1 class="hero-title">Predicting Bitcoin's next <em>direction</em>.</h1>
-  <p class="hero-sub">A blind out-of-sample backtest on the last 30 days of <span class="mono">BTCUSDT</span> hourly closes from Binance (history since 2017-08), with a forward 30-day hourly projection generated from the full series.</p>
+  <p class="hero-sub">A blind out-of-sample backtest on the last 30 days of <span class="mono">BTC/USD</span> hourly closes from Bitstamp (history since 2014-09), with a forward 30-day hourly projection generated from the full series.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -535,8 +535,8 @@ st.markdown(
     """
 <div>
   <span class="eyebrow-sm">00 — Full history</span>
-  <h2 class="section-h">BTC since August 2017</h2>
-  <p class="section-sub">Daily mean of the hourly Binance series since the BTCUSDT pair launched on 2017-08-17. Log scale so $4k Bitcoin and $100k Bitcoin can share the same canvas.</p>
+  <h2 class="section-h">BTC since September 2014</h2>
+  <p class="section-sub">Daily mean of the hourly Bitstamp BTC/USD series since 2014-09-17 — the full eleven-year journey from $400 to $100k+. Log scale so the early years stay legible.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -604,7 +604,7 @@ with right:
     st.markdown(
         f"""
 <div>
-  <div class="step"><span class="step-num">01</span><div><strong>Fetch</strong><span class="body">All-time BTCUSDT hourly closes from Binance ({meta["n_observations"]:,} hourly bars since {fmt_date(data_start)}).</span></div></div>
+  <div class="step"><span class="step-num">01</span><div><strong>Fetch</strong><span class="body">All-time BTC/USD hourly closes from Bitstamp ({meta["n_observations"]:,} hourly bars since {fmt_date(data_start)}).</span></div></div>
   <div class="step"><span class="step-num">02</span><div><strong>Hold out</strong><span class="body">Last 720 hours (30 days) are removed from the training set and never seen by the model.</span></div></div>
   <div class="step"><span class="step-num">03</span><div><strong>Fit</strong><span class="body">Prophet on log-prices with daily, weekly and yearly seasonality and a flexible changepoint prior.</span></div></div>
   <div class="step"><span class="step-num">04</span><div><strong>Score</strong><span class="body">Predictions over the held-out window scored on MAE, RMSE, MAPE, and directional hit-rate.</span></div></div>
@@ -621,7 +621,7 @@ st.markdown(
     f"""
 <div class="footer">
   <div>{fmt_date(data_start)} → {fmt_date(data_end)} · {meta["n_observations"]:,} hourly observations</div>
-  <div>Source: Binance · Model: Prophet · Generated {fmt_date(generated)}</div>
+  <div>Source: Bitstamp · Model: Prophet · Generated {fmt_date(generated)}</div>
 </div>
 """,
     unsafe_allow_html=True,
